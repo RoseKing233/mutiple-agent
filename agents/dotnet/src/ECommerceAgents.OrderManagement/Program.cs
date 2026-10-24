@@ -1,0 +1,44 @@
+using ECommerceAgents.OrderManagement.Tools;
+using ECommerceAgents.Shared.Tools;
+using ECommerceAgents.Shared.A2A;
+using ECommerceAgents.Shared.Agents;
+using ECommerceAgents.Shared.Prompts;
+using Microsoft.Agents.AI;
+using Microsoft.Extensions.DependencyInjection;
+
+var app = AgentHost.Build(
+    name: "order-management",
+    description: "Handles order lookup, status, cancellation, and returns.",
+    port: 8082,
+    onMessage: (message, services) => AgentHost.RunAgentWithHistoryAsync(services, message),
+    configureServices: (builder, settings) =>
+    {
+        builder.Services.AddSingleton(new PromptLoader(PromptsRoot()));
+        builder.Services.AddSingleton<OrderTools>();
+        builder.Services.AddSingleton<ReturnTools>();
+        builder.Services.AddSingleton<UserProfileTools>();
+        builder.Services.AddSingleton<AIAgent>(sp =>
+        {
+            var prompts = sp.GetRequiredService<PromptLoader>();
+            var tools = sp.GetRequiredService<OrderTools>();
+            var returnTools = sp.GetRequiredService<ReturnTools>();
+            var userProfileTools = sp.GetRequiredService<UserProfileTools>();
+            return SpecialistAgentFactory.Create(settings, prompts, "order-management", tools.All().Concat(userProfileTools.All()).Concat(returnTools.All()), services: sp);
+        });
+    }
+);
+
+app.Run(Environment.GetEnvironmentVariable("ASPNETCORE_URLS") ?? "http://0.0.0.0:8082");
+
+
+static string PromptsRoot()
+{
+    var dir = new DirectoryInfo(AppContext.BaseDirectory);
+    while (dir is not null && !Directory.Exists(Path.Combine(dir.FullName, "agents", "python", "config", "prompts")))
+    {
+        dir = dir.Parent;
+    }
+    return dir is not null
+        ? Path.Combine(dir.FullName, "agents", "python", "config", "prompts")
+        : Path.Combine(AppContext.BaseDirectory, "config", "prompts");
+}

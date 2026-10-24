@@ -1,0 +1,53 @@
+# CI-only coverage config (INI format).
+#
+# The integration/e2e stack (Postgres + Redis + all agents via docker compose,
+# plus a real OPENAI_API_KEY — the LLM is never mocked) is intentionally NOT run
+# in CI: it is impractical and costly on every push. As a result, modules that
+# can only be exercised through that live stack — agent tool implementations
+# (`*/tools.py`, `shared/tools/*`), the orchestrator HTTP surface
+# (`orchestrator/routes.py`), service entrypoints (`*/main.py`, `*/agent.py`),
+# and auth/JWT/telemetry/DB plumbing — are omitted here so this job measures the
+# unit-testable framework surface.
+#
+# The full 70% bar across ALL source still lives in pyproject.toml
+# ([tool.coverage.report] fail_under = 70) and is enforced when the integration
+# suite runs (locally / a live-stack run). This CI job enforces the SAME 70%
+# threshold on the framework modules it can actually cover.
+#
+# Keep [run] source and [report] exclude_lines in sync with pyproject.toml.
+
+[run]
+branch = True
+source =
+    shared
+    orchestrator
+    product_discovery
+    order_management
+    pricing_promotions
+    review_sentiment
+    inventory_fulfillment
+omit =
+    */tests/*
+    */__init__.py
+    */main.py
+    */agent.py
+    */prompts.py
+    */tools.py
+    shared/tools/*
+    orchestrator/routes.py
+    orchestrator/intent.py
+    shared/auth.py
+    shared/jwt_utils.py
+    shared/usage_db.py
+    shared/schema_context.py
+    shared/tool_examples.py
+    shared/telemetry.py
+    shared/db.py
+
+[report]
+fail_under = 70
+show_missing = True
+exclude_lines =
+    pragma: no cover
+    if TYPE_CHECKING:
+    raise NotImplementedError

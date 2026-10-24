@@ -1,0 +1,366 @@
+"""Product Discovery tools — search, compare, semantic search, trending."""
+
+from __future__ import annotations
+
+import json
+from typing import Annotated
+
+from agent_framework import tool
+from pydantic import Field
+
+from shared.agent_factory import create_embedding_client, get_embedding_model
+from shared.db import get_pool
+from shared.search import RRF_K, or_joined_tsquery
+from shared.tool_inputs import clamp_limit
+
+SORT_CLAUSES = {
+    "price_asc": "p.price ASC",
+    "price_desc": "p.price DESC",
+    "rating": "p.rating DESC",
+    "newest": "p.created_at DESC",
+}
+RATING_SORT = "p.rating DESC, p.review_count DESC"
+
+
+@tool(name="search_products", description="Search the product catalog using natural language. Supports filtering by category, price range, and rating.")
+async def search_products(
+    query: Annotated[str | None, Field(description="Natural language search query (optional if using category filter)")] = None,
+    category: Annotated[str | None, Field(description="Filter by category: Electronics, Clothing, Home, Sports, Books")] = None,
+    min_price: Annotated[float | None, Field(description="Minimum price filter")] = None,
+    max_price: Annotated[float | None, Field(description="Maximum price filter")] = None,
+    min_rating: Annotated[float | None, Field(description="Minimum rating (1-5)")] = None,
+    sort_by: Annotated[str | None, Field(description="Sort by: price_asc, price_desc, rating, newest")] = None,
+    limit: Annotated[int, Field(description="Max results to return")] = 10,
+) -> list[dict]:
+    pool = get_pool()
+    safe_limit = clamp_limit(limit, default=10, maximum=100)
+    conditions = ["p.is_active = TRUE"]
+    args: list = []
+    idx = 1
+
+    # Postgres full-text search over the weighted search_vector column.
+    tsquery: str | None = None
+    if query and query.strip():
+        tsquery = or_joined_tsquery(f"${idx}")
+        # A stopword- or punctuation-only query ("the", "???") reduces to an
+        # empty tsquery, which matches no rows. Treat that as "no text query"
+        # and let the remaining filters stand on their own.
+        conditions.append(f"({tsquery} = ''::tsquery OR p.search_vector @@ {tsquery})")
+        args.append(query)
+        idx += 1
+
+    if category:
+        conditions.append(f"p.category = ${idx}")
+        args.append(category)
+        idx += 1
+
+    if min_price is not None:
+        conditions.append(f"p.price >= ${idx}")
+        args.append(min_price)
+        idx += 1
+
+    if max_price is not None:
+        conditions.append(f"p.price <= ${idx}")
+        args.append(max_price)
+        idx += 1
+
+    if min_rating is not None:
+        conditions.append(f"p.rating >= ${idx}")
+        args.append(min_rating)
+        idx += 1
+
+    # An explicit sort_by always wins. Otherwise rank by text relevance when
+    # there is a query (the old code ordered by rating regardless, so a weak
+    # match with good reviews outranked an exact one), else by rating.
+    if sort_by in SORT_CLAUSES:
+        order = SORT_CLAUSES[sort_by]
+    elif tsquery:
+        order = f"ts_rank(p.search_vector, {tsquery}) DESC, {RATING_SORT}"
+    else:
+        order = RATING_SORT
+
+    where = " AND ".join(conditions)
+    sql = f"""
+        SELECT p.id, p.name, p.description, p.category, p.brand, p.price,
+               p.original_price, p.rating, p.review_count, p.specs, p.image_url
+        FROM products p
+        WHERE {where}
+        ORDER BY {order}
+        LIMIT {safe_limit}
+    """
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(sql, *args)
+        return [
+            {
+                "id": str(r["id"]),
+                "name": r["name"],
+                "description": r["description"][:150],
+                "category": r["category"],
+                "brand": r["brand"],
+                "price": float(r["price"]),
+                "original_price": float(r["original_price"]) if r["original_price"] else None,
+                "on_sale": r["original_price"] is not None and r["price"] < r["original_price"],
+                "rating": float(r["rating"]),
+                "review_count": r["review_count"],
+                "image_url": r["image_url"],
+            }
+            for r in rows
+        ]
+
+
+@tool(name="get_product_details", description="Get complete details for a specific product including full specs.")
+async def get_product_details(
+    product_id: Annotated[str, Field(description="UUID of the product")],
+) -> dict:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT id, name, description, category, brand, price, original_price,
+                      image_url, rating, review_count, specs
+               FROM products WHERE id = $1""",
+            product_id,
+        )
+        if not row:
+            return {"error": f"Product not found: {product_id}"}
+
+        return {
+            "id": str(row["id"]),
+            "name": row["name"],
+            "description": row["description"],
+            "category": row["category"],
+            "brand": row["brand"],
+            "price": float(row["price"]),
+            "original_price": float(row["original_price"]) if row["original_price"] else None,
+            "on_sale": row["original_price"] is not None and row["price"] < row["original_price"],
+            "rating": float(row["rating"]),
+            "review_count": row["review_count"],
+            "specs": json.loads(row["specs"]) if isinstance(row["specs"], str) else dict(row["specs"]),
+        }
+
+
+@tool(name="compare_products", description="Compare 2-3 products side-by-side on key attributes.")
+async def compare_products(
+    product_ids: Annotated[list[str], Field(description="List of 2-3 product UUIDs to compare")],
+) -> list[dict]:
+    if len(product_ids) < 2 or len(product_ids) > 3:
+        return [{"error": "Please provide 2-3 product IDs to compare"}]
+
+    pool = get_pool()
+    results = []
+    async with pool.acquire() as conn:
+        for pid in product_ids:
+            row = await conn.fetchrow(
+                """SELECT id, name, category, brand, price, original_price, rating, review_count, specs
+                   FROM products WHERE id = $1""",
+                pid,
+            )
+            if row:
+                results.append({
+                    "id": str(row["id"]),
+                    "name": row["name"],
+                    "category": row["category"],
+                    "brand": row["brand"],
+                    "price": float(row["price"]),
+                    "original_price": float(row["original_price"]) if row["original_price"] else None,
+                    "rating": float(row["rating"]),
+                    "review_count": row["review_count"],
+                    "specs": json.loads(row["specs"]) if isinstance(row["specs"], str) else dict(row["specs"]),
+                })
+    return results
+
+
+@tool(name="semantic_search", description="Search products using semantic similarity via pgvector embeddings. Best for vague or descriptive queries like 'something cozy for winter' or 'gift for a tech enthusiast'.")
+async def semantic_search(
+    query: Annotated[str, Field(description="Descriptive search query in natural language")],
+    limit: Annotated[int, Field(description="Max results")] = 5,
+) -> list[dict]:
+    pool = get_pool()
+
+    # Generate embedding via OpenAI / Azure OpenAI
+    client = create_embedding_client()
+    response = await client.embeddings.create(model=get_embedding_model(), input=[query])
+    embedding = response.data[0].embedding
+
+    # Pull a wider candidate set from each arm than we return — fusion only has
+    # something to work with if a document can appear in one list but not the other.
+    candidates = max(limit * 4, 20)
+
+    # Hybrid retrieval: rank by vector cosine and by full-text relevance
+    # independently, then fuse with Reciprocal Rank Fusion. RRF sums 1/(k+rank)
+    # across arms, so a product both arms like outranks one that tops a single
+    # arm, and neither arm's raw scores need to be on a comparable scale.
+    sql = f"""
+        WITH vec AS (
+            SELECT pe.product_id,
+                   1 - (pe.embedding <=> $1::vector) AS similarity,
+                   ROW_NUMBER() OVER (ORDER BY pe.embedding <=> $1::vector) AS rank
+            FROM product_embeddings pe
+            JOIN products p ON pe.product_id = p.id
+            WHERE p.is_active = TRUE
+            LIMIT $3
+        ),
+        fts AS (
+            SELECT p.id AS product_id,
+                   ROW_NUMBER() OVER (ORDER BY ts_rank(p.search_vector, {or_joined_tsquery("$2")}) DESC) AS rank
+            FROM products p
+            WHERE p.is_active = TRUE
+              AND {or_joined_tsquery("$2")} <> ''::tsquery
+              AND p.search_vector @@ {or_joined_tsquery("$2")}
+            LIMIT $3
+        ),
+        fused AS (
+            SELECT COALESCE(v.product_id, f.product_id) AS product_id,
+                   v.similarity,
+                   COALESCE(1.0 / ({RRF_K} + v.rank), 0) + COALESCE(1.0 / ({RRF_K} + f.rank), 0) AS score
+            FROM vec v
+            FULL OUTER JOIN fts f ON v.product_id = f.product_id
+        )
+        SELECT p.id, p.name, p.description, p.category, p.brand, p.price, p.rating, p.image_url,
+               fu.similarity, fu.score
+        FROM fused fu
+        JOIN products p ON p.id = fu.product_id
+        ORDER BY fu.score DESC, p.rating DESC
+        LIMIT $4
+    """
+
+    async with pool.acquire() as conn:
+        # Raise ivfflat's probe count for this query (#52).
+        #
+        # `idx_product_embedding` is created by init.sql on an EMPTY table, so
+        # ivfflat has no data to derive centroids from and every vector lands
+        # in a degenerate partition. At the default `probes = 1` a query probes
+        # one list and returns whatever is in it — or nothing at all. Measured
+        # on a seeded database: "wireless noise cancelling headphones" returned
+        # "Patagonia Better Sweater" at similarity 0.000 through the index, and
+        # "Sony WH-1000XM5" at 0.420 with an exact scan. Same data, same query.
+        #
+        # generate_embeddings.py now REINDEXes after writing, which fixes the
+        # normal path, but any other insert (a test, one new product) leaves
+        # the index stale again. Probing every list makes correctness
+        # independent of whether someone remembered to reindex. It costs
+        # nothing at this catalogue size — with `lists = 10` this is an exact
+        # search over 50 rows — and degrades to an ordinary recall/latency
+        # trade-off if the catalogue ever grows enough for the index to earn
+        # its keep.
+        #
+        # This matters more under RRF than it did before: the vector arm now
+        # contributes a *rank*, so a degenerate probe doesn't just return a
+        # weak row, it feeds a wrong ordering into the fusion.
+        #
+        # SET LOCAL only applies inside a transaction; outside one it is a
+        # no-op that warns rather than errors, which is its own quiet trap.
+        async with conn.transaction():
+            await conn.execute("SET LOCAL ivfflat.probes = 10")
+            rows = await conn.fetch(sql, json.dumps(embedding), query, candidates, limit)
+
+        return [
+            {
+                "id": str(r["id"]),
+                "name": r["name"],
+                "description": r["description"][:150],
+                "category": r["category"],
+                "brand": r["brand"],
+                "price": float(r["price"]),
+                "rating": float(r["rating"]),
+                # None when only the text arm matched — the product has no embedding
+                # row, or ranked outside the vector candidate window.
+                "similarity": round(float(r["similarity"]), 3) if r["similarity"] is not None else None,
+                "score": round(float(r["score"]), 5),
+                "image_url": r["image_url"],
+            }
+            for r in rows
+        ]
+
+
+@tool(name="find_similar_products", description="Find products similar to a given product based on embedding similarity.")
+async def find_similar_products(
+    product_id: Annotated[str, Field(description="UUID of the reference product")],
+    limit: Annotated[int, Field(description="Max results")] = 5,
+) -> list[dict]:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        # Get the reference product's embedding
+        ref = await conn.fetchrow(
+            "SELECT embedding FROM product_embeddings WHERE product_id = $1", product_id,
+        )
+        if not ref:
+            return [{"error": f"No embedding found for product {product_id}"}]
+
+        # Same stale-ivfflat exposure as semantic_search — see the long note
+        # there. This query hits the same index, so it needs the same probe
+        # count or it returns unrelated products (or none) just as readily.
+        async with conn.transaction():
+            await conn.execute("SET LOCAL ivfflat.probes = 10")
+            rows = await conn.fetch(
+                """SELECT p.id, p.name, p.category, p.brand, p.price, p.rating,
+                          1 - (pe.embedding <=> $1) as similarity
+                   FROM product_embeddings pe
+                   JOIN products p ON pe.product_id = p.id
+                   WHERE pe.product_id != $2 AND p.is_active = TRUE
+                   ORDER BY pe.embedding <=> $1
+                   LIMIT $3""",
+                ref["embedding"],
+                product_id,
+                limit,
+            )
+        return [
+            {
+                "id": str(r["id"]),
+                "name": r["name"],
+                "category": r["category"],
+                "brand": r["brand"],
+                "price": float(r["price"]),
+                "rating": float(r["rating"]),
+                "similarity": round(float(r["similarity"]), 3),
+            }
+            for r in rows
+        ]
+
+
+@tool(name="get_trending_products", description="Get trending products based on recent order volume.")
+async def get_trending_products(
+    category: Annotated[str | None, Field(description="Optional category filter")] = None,
+    days: Annotated[int, Field(description="Trending period in days")] = 30,
+    limit: Annotated[int, Field(description="Max results")] = 10,
+) -> list[dict]:
+    pool = get_pool()
+    safe_limit = clamp_limit(limit, default=10, maximum=50)
+    conditions = ["o.created_at >= NOW() - ($1 || ' days')::interval"]
+    args: list = [str(days)]
+    idx = 2
+
+    if category:
+        conditions.append(f"p.category = ${idx}")
+        args.append(category)
+        idx += 1
+
+    where = " AND ".join(conditions)
+    sql = f"""
+        SELECT p.id, p.name, p.category, p.brand, p.price, p.rating,
+               COUNT(oi.id) as order_count,
+               SUM(oi.quantity) as units_sold
+        FROM products p
+        JOIN order_items oi ON oi.product_id = p.id
+        JOIN orders o ON oi.order_id = o.id
+        WHERE {where}
+        GROUP BY p.id, p.name, p.category, p.brand, p.price, p.rating
+        ORDER BY units_sold DESC
+        LIMIT {safe_limit}
+    """
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(sql, *args)
+        return [
+            {
+                "id": str(r["id"]),
+                "name": r["name"],
+                "category": r["category"],
+                "brand": r["brand"],
+                "price": float(r["price"]),
+                "rating": float(r["rating"]),
+                "order_count": r["order_count"],
+                "units_sold": r["units_sold"],
+            }
+            for r in rows
+        ]

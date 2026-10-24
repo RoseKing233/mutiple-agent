@@ -1,0 +1,550 @@
+-- ============================================================
+-- E-Commerce Agents — Database Schema
+-- PostgreSQL 16 + pgvector
+-- ============================================================
+
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- ============================================================
+-- AUTH & USERS
+-- ============================================================
+
+CREATE TABLE users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email VARCHAR(255) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    role VARCHAR(50) NOT NULL DEFAULT 'customer',  -- customer, power_user, seller, admin
+    loyalty_tier VARCHAR(50) DEFAULT 'bronze',      -- bronze, silver, gold
+    total_spend DECIMAL(10, 2) DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    is_active BOOLEAN DEFAULT TRUE
+);
+
+-- ============================================================
+-- PRODUCT CATALOG
+-- ============================================================
+
+CREATE TABLE products (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(255) NOT NULL,
+    description TEXT NOT NULL,
+    category VARCHAR(100) NOT NULL,   -- Electronics, Clothing, Home, Sports, Books
+    brand VARCHAR(100),
+    price DECIMAL(10, 2) NOT NULL,
+    original_price DECIMAL(10, 2),    -- For showing discounts
+    image_url VARCHAR(500),
+    rating DECIMAL(3, 2) DEFAULT 0,
+    review_count INTEGER DEFAULT 0,
+    specs JSONB DEFAULT '{}',          -- Product-specific attributes
+    is_active BOOLEAN DEFAULT TRUE,
+    seller_id UUID REFERENCES users(id),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    -- Full-text search vector, maintained by Postgres on every write.
+    -- Weighted so a name hit outranks a brand hit, which outranks a
+    -- description hit — ts_rank() reads these weights when ordering.
+    search_vector tsvector GENERATED ALWAYS AS (
+        setweight(to_tsvector('english', coalesce(name, '')), 'A') ||
+        setweight(to_tsvector('english', coalesce(brand, '')), 'B') ||
+        setweight(to_tsvector('english', coalesce(description, '')), 'C')
+    ) STORED
+);
+
+CREATE TABLE product_embeddings (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    product_id UUID REFERENCES products(id) ON DELETE CASCADE,
+    embedding vector(1536),            -- text-embedding-3-small dimension
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_product_embedding ON product_embeddings
+    USING ivfflat (embedding vector_cosine_ops) WITH (lists = 10);
+
+CREATE TABLE price_history (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    product_id UUID REFERENCES products(id) ON DELETE CASCADE,
+    price DECIMAL(10, 2) NOT NULL,
+    recorded_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============================================================
+-- ORDERS & RETURNS
+-- ============================================================
+
+CREATE TABLE orders (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(id),
+    status VARCHAR(50) NOT NULL DEFAULT 'placed',
+        -- placed, confirmed, shipped, out_for_delivery, delivered, cancelled, returned
+    total DECIMAL(10, 2) NOT NULL,
+    shipping_address JSONB NOT NULL,    -- {name, street, city, state, zip, country, phone}
+    billing_address JSONB,              -- {name, street, city, state, zip, country, phone}
+    shipping_carrier VARCHAR(100),
+    tracking_number VARCHAR(255),
+    coupon_code VARCHAR(50),
+    discount_amount DECIMAL(10, 2) DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE order_items (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    order_id UUID REFERENCES orders(id) ON DELETE CASCADE,
+    product_id UUID REFERENCES products(id),
+    quantity INTEGER NOT NULL,
+    unit_price DECIMAL(10, 2) NOT NULL,
+    subtotal DECIMAL(10, 2) NOT NULL
+);
+
+CREATE TABLE order_status_history (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    order_id UUID REFERENCES orders(id) ON DELETE CASCADE,
+    status VARCHAR(50) NOT NULL,
+    notes TEXT,
+    location VARCHAR(255),            -- Tracking location
+    timestamp TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE returns (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    order_id UUID REFERENCES orders(id),
+    user_id UUID REFERENCES users(id),
+    reason VARCHAR(255) NOT NULL,
+    status VARCHAR(50) DEFAULT 'requested',  -- requested, approved, shipped_back, received, refunded, denied
+    return_label_url VARCHAR(500),
+    refund_method VARCHAR(50),          -- original_payment, store_credit
+    refund_amount DECIMAL(10, 2),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    resolved_at TIMESTAMPTZ
+);
+
+-- ============================================================
+-- SHOPPING CART
+-- ============================================================
+
+CREATE TABLE carts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(id) UNIQUE NOT NULL,  -- one cart per user
+    shipping_address JSONB,              -- {name, street, city, state, zip, country, phone}
+    billing_address JSONB,               -- {name, street, city, state, zip, country, phone}
+    billing_same_as_shipping BOOLEAN DEFAULT TRUE,
+    coupon_code VARCHAR(50),
+    discount_amount DECIMAL(10, 2) DEFAULT 0,
+    notes TEXT,
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE cart_items (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    cart_id UUID REFERENCES carts(id) ON DELETE CASCADE,
+    product_id UUID REFERENCES products(id),
+    quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity > 0),
+    added_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(cart_id, product_id)
+);
+
+CREATE INDEX idx_carts_user ON carts(user_id);
+CREATE INDEX idx_cart_items_cart ON cart_items(cart_id);
+
+-- ============================================================
+-- REVIEWS
+-- ============================================================
+
+CREATE TABLE reviews (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    product_id UUID REFERENCES products(id) ON DELETE CASCADE,
+    user_id UUID REFERENCES users(id),
+    rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+    title VARCHAR(255),
+    body TEXT NOT NULL,
+    verified_purchase BOOLEAN DEFAULT FALSE,
+    helpful_count INTEGER DEFAULT 0,
+    is_flagged BOOLEAN DEFAULT FALSE,   -- Flagged as potentially fake
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============================================================
+-- INVENTORY & SHIPPING
+-- ============================================================
+
+CREATE TABLE warehouses (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(100) NOT NULL,         -- "East", "Central", "West"
+    location VARCHAR(255) NOT NULL,     -- "Richmond, VA"
+    region VARCHAR(50) NOT NULL         -- "east", "central", "west"
+);
+
+CREATE TABLE warehouse_inventory (
+    warehouse_id UUID REFERENCES warehouses(id),
+    product_id UUID REFERENCES products(id),
+    quantity INTEGER NOT NULL DEFAULT 0,
+    reorder_threshold INTEGER DEFAULT 10,
+    PRIMARY KEY (warehouse_id, product_id)
+);
+
+CREATE TABLE carriers (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(100) NOT NULL,         -- "Standard Shipping", "Express", "Overnight"
+    speed_tier VARCHAR(50) NOT NULL,    -- "standard", "express", "overnight"
+    base_rate DECIMAL(10, 2) NOT NULL
+);
+
+CREATE TABLE shipping_rates (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    carrier_id UUID REFERENCES carriers(id),
+    region_from VARCHAR(50) NOT NULL,
+    region_to VARCHAR(50) NOT NULL,
+    price DECIMAL(10, 2) NOT NULL,
+    estimated_days_min INTEGER NOT NULL,
+    estimated_days_max INTEGER NOT NULL
+);
+
+CREATE TABLE restock_schedule (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    product_id UUID REFERENCES products(id),
+    warehouse_id UUID REFERENCES warehouses(id),
+    expected_quantity INTEGER NOT NULL,
+    expected_date DATE NOT NULL
+);
+
+-- ============================================================
+-- PRICING & PROMOTIONS
+-- ============================================================
+
+CREATE TABLE coupons (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    code VARCHAR(50) UNIQUE NOT NULL,
+    description TEXT,
+    discount_type VARCHAR(20) NOT NULL,  -- "percentage", "fixed"
+    discount_value DECIMAL(10, 2) NOT NULL,
+    min_spend DECIMAL(10, 2) DEFAULT 0,
+    max_discount DECIMAL(10, 2),         -- Cap for percentage discounts
+    usage_limit INTEGER,
+    times_used INTEGER DEFAULT 0,
+    valid_from TIMESTAMPTZ DEFAULT NOW(),
+    valid_until TIMESTAMPTZ,
+    applicable_categories TEXT[],         -- NULL = all categories
+    user_specific_email VARCHAR(255),     -- NULL = all users
+    is_active BOOLEAN DEFAULT TRUE
+);
+
+CREATE TABLE promotions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(255) NOT NULL,
+    type VARCHAR(50) NOT NULL,           -- "bundle", "buy_x_get_y", "flash_sale"
+    rules JSONB NOT NULL,                -- Flexible rule definitions
+    start_date TIMESTAMPTZ NOT NULL,
+    end_date TIMESTAMPTZ NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE
+);
+
+CREATE TABLE loyalty_tiers (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(50) UNIQUE NOT NULL,    -- "bronze", "silver", "gold"
+    min_spend DECIMAL(10, 2) NOT NULL,   -- Spend threshold to reach tier
+    discount_pct DECIMAL(5, 2) NOT NULL, -- Tier-wide discount percentage
+    free_shipping_threshold DECIMAL(10, 2),
+    priority_support BOOLEAN DEFAULT FALSE
+);
+
+-- ============================================================
+-- MARKETPLACE (Agent Catalog & Access Control)
+-- ============================================================
+
+CREATE TABLE agent_catalog (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(100) UNIQUE NOT NULL,   -- "product-discovery"
+    display_name VARCHAR(255) NOT NULL,
+    description TEXT NOT NULL,
+    category VARCHAR(100),
+    icon VARCHAR(50),
+    status VARCHAR(50) DEFAULT 'active',
+    version VARCHAR(20) DEFAULT '1.0',
+    capabilities TEXT[] DEFAULT '{}',
+    input_types TEXT[] DEFAULT '{text}',
+    output_types TEXT[] DEFAULT '{text}',
+    requires_approval BOOLEAN DEFAULT TRUE,
+    allowed_roles TEXT[] DEFAULT '{power_user,admin}',
+    config JSONB DEFAULT '{}'
+);
+
+CREATE TABLE access_requests (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(id),
+    agent_name VARCHAR(100) REFERENCES agent_catalog(name),
+    role_requested VARCHAR(50) NOT NULL,
+    use_case TEXT NOT NULL,
+    status VARCHAR(50) DEFAULT 'pending',  -- pending, approved, denied
+    admin_notes TEXT,
+    reviewed_by UUID REFERENCES users(id),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    resolved_at TIMESTAMPTZ
+);
+
+CREATE TABLE agent_permissions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(id),
+    agent_name VARCHAR(100) REFERENCES agent_catalog(name),
+    role VARCHAR(50) NOT NULL,
+    granted_at TIMESTAMPTZ DEFAULT NOW(),
+    granted_by UUID REFERENCES users(id),
+    UNIQUE(user_id, agent_name)
+);
+
+-- ============================================================
+-- CONVERSATIONS & USAGE
+-- ============================================================
+
+CREATE TABLE conversations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(id),
+    title VARCHAR(255),
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    last_message_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE messages (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
+    role VARCHAR(50) NOT NULL,           -- "user", "assistant", "system"
+    content TEXT NOT NULL,
+    agent_name VARCHAR(100),             -- Which agent generated this response
+    agents_involved TEXT[],              -- For multi-agent responses
+    metadata JSONB DEFAULT '{}',         -- Tool calls, trace data, etc.
+    tokens_in INTEGER DEFAULT 0,
+    tokens_out INTEGER DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE usage_logs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(id),
+    agent_name VARCHAR(100) NOT NULL,
+    session_id UUID,
+    trace_id VARCHAR(64),               -- OTel trace_id for correlation with Aspire
+    input_summary TEXT,
+    tokens_in INTEGER DEFAULT 0,
+    tokens_out INTEGER DEFAULT 0,
+    tool_calls_count INTEGER DEFAULT 0,
+    duration_ms INTEGER,
+    status VARCHAR(50) DEFAULT 'success',
+    error_message TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE agent_execution_steps (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    usage_log_id UUID REFERENCES usage_logs(id) ON DELETE CASCADE,
+    step_index INTEGER NOT NULL,
+    tool_name VARCHAR(255),
+    tool_input JSONB,
+    tool_output JSONB,
+    status VARCHAR(50) DEFAULT 'success',
+    duration_ms INTEGER,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============================================================
+-- TOOL-LEVEL HITL APPROVAL QUEUE
+-- (distinct from hitl_requests which is used by the WorkflowBuilder HITL)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS tool_approval_requests (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id UUID,
+    user_email VARCHAR(255) NOT NULL,
+    agent_name VARCHAR(100) NOT NULL,
+    tool_name VARCHAR(255) NOT NULL,
+    tool_input JSONB NOT NULL,
+    status VARCHAR(50) DEFAULT 'pending',
+        -- pending, processing (transient — claimed by an admin approve/deny
+        -- request, atomically flipped from pending before the underlying
+        -- action executes, so two concurrent approve clicks can't both run
+        -- it), approved, denied, executed
+    admin_note TEXT,
+    approved_by VARCHAR(255),
+    execution_result JSONB,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    resolved_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_tool_approvals_status ON tool_approval_requests(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tool_approvals_user ON tool_approval_requests(user_email, created_at DESC);
+
+-- ============================================================
+-- IDEMPOTENCY KEYS
+-- Phase 6.1: dedupes retried money-moving operations (checkout, refunds,
+-- returns) so a client-side retry after a timeout/network blip replays the
+-- original result instead of executing a second time. See
+-- agents/python/shared/idempotency.py for the reservation protocol this
+-- table implements (INSERT ... ON CONFLICT DO NOTHING as a claim, an
+-- "in_progress" row older than the staleness window is treated as an
+-- abandoned attempt and taken over, not a permanent lock).
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS idempotency_keys (
+    key VARCHAR(600) PRIMARY KEY,
+    scope VARCHAR(255) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'in_progress',  -- in_progress, completed
+    result JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_idempotency_keys_scope ON idempotency_keys(scope, created_at DESC);
+
+-- ============================================================
+-- INDEXES
+-- ============================================================
+
+CREATE INDEX idx_products_seller ON products(seller_id);
+CREATE INDEX idx_products_category ON products(category);
+CREATE INDEX idx_products_price ON products(price);
+CREATE INDEX idx_products_rating ON products(rating DESC);
+CREATE INDEX idx_products_search ON products USING GIN (search_vector);
+CREATE INDEX idx_orders_user ON orders(user_id, created_at DESC);
+CREATE INDEX idx_orders_status ON orders(status);
+-- Audit fix #7: order_items.product_id is a FK with no index, so every
+-- "orders that include product X" lookup or trending-products query
+-- sequentially scans the join table. One b-tree on the FK fixes it.
+CREATE INDEX idx_order_items_product ON order_items(product_id);
+CREATE INDEX idx_reviews_product ON reviews(product_id, created_at DESC);
+CREATE INDEX idx_reviews_rating ON reviews(product_id, rating);
+CREATE INDEX idx_warehouse_inv ON warehouse_inventory(product_id);
+CREATE INDEX idx_price_history ON price_history(product_id, recorded_at DESC);
+CREATE INDEX idx_access_requests_status ON access_requests(status, created_at DESC);
+CREATE INDEX idx_usage_logs_user ON usage_logs(user_id, created_at DESC);
+CREATE INDEX idx_usage_logs_agent ON usage_logs(agent_name, created_at DESC);
+CREATE INDEX idx_usage_logs_trace ON usage_logs(trace_id);
+CREATE INDEX idx_messages_conversation ON messages(conversation_id, created_at);
+
+-- ── Agent Memory ──────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS agent_memories (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id),
+    category VARCHAR(50) NOT NULL,
+    content TEXT NOT NULL,
+    importance SMALLINT DEFAULT 5,
+    embedding vector(1536),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    expires_at TIMESTAMPTZ,
+    is_active BOOLEAN DEFAULT TRUE
+);
+CREATE INDEX IF NOT EXISTS idx_memories_user ON agent_memories(user_id, is_active);
+CREATE INDEX IF NOT EXISTS idx_memories_category ON agent_memories(user_id, category);
+
+-- ============================================================
+-- MAF v1 PHASE 7 — DURABLE WORKFLOW STATE
+-- ============================================================
+-- Checkpoints: one row per superstep per workflow run. Populated by
+-- PostgresCheckpointStorage (shared/checkpoint_storage.py).
+--
+-- usage_log_id correlates a checkpoint back to the "run" the web UI and
+-- GET /api/runs already know about (usage_logs) — MAF's own
+-- CheckpointStorage interface only scopes list/get_latest by
+-- workflow_name, which is fixed per workflow *type* ("pre-purchase",
+-- "return-and-replace"), not per run instance, so it can't disambiguate
+-- two users' concurrent runs of the same workflow on its own.
+CREATE TABLE IF NOT EXISTS workflow_checkpoints (
+    checkpoint_id  UUID PRIMARY KEY,
+    workflow_name  TEXT NOT NULL,
+    payload        JSONB NOT NULL,           -- encoded WorkflowCheckpoint dict
+    usage_log_id   UUID REFERENCES usage_logs(id) ON DELETE SET NULL,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- The three columns below exist for MAF .NET's checkpoint store, which keys on
+    -- (session_id, checkpoint_id) rather than an id alone. Without session_id a .NET
+    -- resume cannot even construct the lookup key. All three are nullable/defaulted, so
+    -- the Python stack — which INSERTs an explicit column list — is unaffected and the
+    -- two stacks keep sharing this table.
+    session_id            TEXT,
+    parent_checkpoint_id  UUID REFERENCES workflow_checkpoints(checkpoint_id) ON DELETE SET NULL,
+    -- Ordering is load-bearing, not cosmetic: MAF resumes the checkpoint its index
+    -- returns first, so a store that answers out of order silently resumes the wrong
+    -- superstep. created_at can tie at this resolution; a sequence cannot.
+    seq                   BIGSERIAL
+);
+
+CREATE INDEX IF NOT EXISTS idx_workflow_checkpoints_session
+    ON workflow_checkpoints(session_id, seq);
+CREATE INDEX IF NOT EXISTS idx_checkpoints_workflow_created
+    ON workflow_checkpoints(workflow_name, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_checkpoints_usage_log
+    ON workflow_checkpoints(usage_log_id);
+
+-- HITL requests: one row per pause, resolved by user/admin response.
+-- Consumed by workflow:return-replace's in-workflow ctx.request_info gate
+-- (orchestrator/modes/workflow_mode.py::ReturnReplaceMode) via
+-- POST /api/orchestration/{run_id}/resume. request_id is MAF's own pause
+-- token — the key resuming workflow.run(responses={request_id: ...})
+-- needs; checkpoint_id is which durable point to reload from. Both are
+-- null only for request kinds this table predates (tool-level approval,
+-- shared/hitl.py, which never paused a MAF workflow to begin with).
+CREATE TABLE IF NOT EXISTS hitl_requests (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workflow_run_id  UUID NOT NULL REFERENCES usage_logs(id) ON DELETE CASCADE,
+    request_id       TEXT,
+    checkpoint_id    UUID REFERENCES workflow_checkpoints(checkpoint_id) ON DELETE SET NULL,
+    user_email       TEXT NOT NULL,
+    kind             TEXT NOT NULL,          -- 'return_approval' | 'tool_approval' | ...
+    payload          JSONB NOT NULL,         -- request data surfaced to the UI
+    status           TEXT NOT NULL DEFAULT 'pending',  -- pending | approved | rejected | timeout
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    responded_at     TIMESTAMPTZ,
+    response         JSONB                   -- decision payload (null while pending)
+);
+CREATE INDEX IF NOT EXISTS idx_hitl_user_status
+    ON hitl_requests(user_email, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_hitl_run
+    ON hitl_requests(workflow_run_id);
+
+-- ============================================================
+-- OAUTH2 AUTHORIZATION SERVER (self-hosted, offline — AUTH_MODE=oauth)
+-- ============================================================
+-- Fixed, seeded client registry — no dynamic client registration.
+-- One row per first-party service (orchestrator + each specialist).
+CREATE TABLE IF NOT EXISTS oauth_clients (
+    client_id                  VARCHAR(100) PRIMARY KEY,
+    client_secret_hash         VARCHAR(255) NOT NULL,
+    client_name                VARCHAR(255) NOT NULL,
+    is_confidential            BOOLEAN NOT NULL DEFAULT TRUE,
+    allowed_grant_types        TEXT[] NOT NULL,
+    allowed_scopes             TEXT[] NOT NULL,
+    allowed_audiences          TEXT[] NOT NULL,
+    token_endpoint_auth_method VARCHAR(50) NOT NULL DEFAULT 'client_secret_basic',
+    created_at                 TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- RSA signing keypairs for RS256 access tokens. The active key signs new
+-- tokens; retired keys stay listed in the JWKS until the longest-lived
+-- token that could reference them expires (see docs/security-guide.md).
+CREATE TABLE IF NOT EXISTS oauth_signing_keys (
+    kid             VARCHAR(64) PRIMARY KEY,
+    alg             VARCHAR(20) NOT NULL DEFAULT 'RS256',
+    public_jwk      JSONB NOT NULL,
+    private_pem_enc BYTEA NOT NULL,
+    is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    retired_at      TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_signing_keys_active ON oauth_signing_keys(is_active);
+
+-- Refresh tokens only — access tokens are stateless RS256 JWTs, validated
+-- via JWKS, never stored here. Refresh grants are non-rotating (see
+-- docs/security-guide.md) to keep the browser's single stored refresh
+-- token valid across the session's lifetime.
+CREATE TABLE IF NOT EXISTS oauth_tokens (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    client_id    VARCHAR(100) NOT NULL REFERENCES oauth_clients(client_id),
+    subject      VARCHAR(255),              -- user email for ROPC-issued tokens, NULL for client-credentials
+    token_type   VARCHAR(20) NOT NULL,       -- currently only 'refresh_token'
+    token_hash   VARCHAR(255) NOT NULL,      -- sha256 hex digest, never the raw token
+    scope        TEXT,
+    audience     TEXT,
+    issued_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at   TIMESTAMPTZ NOT NULL,
+    revoked      BOOLEAN NOT NULL DEFAULT FALSE
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_hash ON oauth_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_client ON oauth_tokens(client_id, revoked);

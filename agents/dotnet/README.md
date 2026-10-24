@@ -1,0 +1,87 @@
+# ECommerceAgents — .NET Backend
+
+A complete, working .NET / C# implementation of the platform, built with Microsoft Agent
+Framework alongside the Python backend at `../python/`. Development here is Python-first — see
+[`../../docs/parity-matrix.md`](../../docs/parity-matrix.md) for exactly which concepts are at
+full parity today versus still on the .NET backlog.
+
+Both stacks share:
+- Postgres schema at `../../docker/postgres/init.sql`
+- Prompt YAML at `../python/config/prompts/`
+- Seed data produced by `../../scripts/seed.py`
+- Next.js frontend at `../../web/` (selects backend via `ORCHESTRATOR_URL`, server-side)
+
+## Projects
+
+| Project | Port | Description |
+|---------|------|-------------|
+| `src/ECommerceAgents.Shared` | library | Config, auth, telemetry, context providers, prompt loader, DB pool |
+| `src/ECommerceAgents.Orchestrator` | 8080 | ASP.NET Core minimal API; HandoffBuilder-based routing |
+| `src/ECommerceAgents.ProductDiscovery` | 8081 | Product catalog agent |
+| `src/ECommerceAgents.OrderManagement` | 8082 | Order lifecycle agent |
+| `src/ECommerceAgents.PricingPromotions` | 8083 | Pricing + coupon agent |
+| `src/ECommerceAgents.ReviewSentiment` | 8084 | Review summarization agent |
+| `src/ECommerceAgents.InventoryFulfillment` | 8085 | Inventory + shipping agent |
+
+Test projects mirror each under `tests/`.
+
+## Build + test
+
+```bash
+cd agents/dotnet
+dotnet restore
+dotnet build
+dotnet test
+```
+
+## Run the full .NET stack
+
+```bash
+# From repo root — one-command helper (builds, seeds, and starts everything):
+./scripts/dev.sh --dotnet      # PowerShell: ./scripts/dev.ps1 -Dotnet
+
+# Or plain Docker Compose. Every app service (seeder, agents, MCP host,
+# frontend) is gated behind a profile — only db/redis/aspire start
+# unconditionally — so `up --build` with no --profile flags only brings up
+# infrastructure. Include all four profiles to get the full app:
+docker compose -f docker-compose.dotnet.yml \
+  --profile seed --profile agents --profile mcp --profile frontend up --build
+```
+
+The Next.js frontend at `http://localhost:3000` talks to whichever orchestrator `ORCHESTRATOR_URL` points at. `docker-compose.dotnet.yml` sets it to the .NET one.
+
+## Central package management
+
+All package versions live in `Directory.Packages.props` at this folder root. Individual `.csproj` files use `<PackageReference Include="..." />` without a `Version=` attribute.
+
+## Status
+
+The .NET backend is functionally complete for the core domain: all six specialist agents plus an
+MCP server (`ECommerceAgents.Mcp`, real JSON-RPC over streamable HTTP via the official
+`ModelContextProtocol.AspNetCore` SDK) are implemented, along with a shared layer covering A2A
+client/host, JWT auth middleware, tool audit logging, PII redaction, checkpoint storage
+(in-memory, file, and Postgres backends), declarative workflow primitives, and config validation.
+
+It is **not** at full parity with the Python backend — see
+[`../../docs/parity-matrix.md`](../../docs/parity-matrix.md) for the honest, per-concept
+breakdown. Agent middleware/context providers are now wired into every live agent, specialist
+agents have a real `/message:stream` SSE endpoint (with live delta forwarding through the
+orchestrator's own chat stream), the guardrail stack now includes inbound prompt-injection
+detection, stored-content sanitization, and output moderation, every tool call is now
+captured into a live agentic timeline (`/runs`, `event: step` SSE frames) across both the
+orchestrator and specialist processes, both `PrePurchaseWorkflow` and `ReturnAndReplaceWorkflow`
+(including its pause/resume HITL gate, on a real `RequestPort`) run on real MAF `WorkflowBuilder`
+graphs, and human-in-the-loop tool approval is a real function-invocation pipeline stage rather
+than a call-site wrapper each gated tool had to invoke itself. A shared tool library now lives in `Shared/Tools/`, so cross-cutting
+tools are registered by whichever specialists need them rather than duplicated per agent.
+Workflow pause and resume is durable: a run checkpoints through MAF's own store and is rebuilt
+from that checkpoint on resume, so a pending approval survives an orchestrator restart. The
+money paths — returns, refunds, approved actions and checkout — are idempotent.
+
+The remaining gaps are handoff and group-chat modes, MCP client consumption, telemetry depth,
+and the evals harness; all python-first. Magentic is in neither stack, so it is not a gap.
+See [`docs/parity-matrix.md`](../../docs/parity-matrix.md) for the row-by-row breakdown.
+
+Eight test projects mirror the source structure — one per agent plus Shared and MCP — with 533 test methods (584 cases once `[Theory]` data rows are expanded) covering tools, middleware, guardrails, timeline capture, workflows, auth, streaming, and A2A protocol behavior (verified directly: `dotnet test ECommerceAgents.sln`). The same PostgreSQL schema and A2A wire format are used across both stacks; you can point the frontend at either backend through `ORCHESTRATOR_URL`, which is read server-side per request rather than compiled into the bundle.
+
+Remaining work is tracked in the one consolidated plan, [`.claude/plans/remaining-work.md`](../../.claude/plans/remaining-work.md).

@@ -1,0 +1,52 @@
+"""Pricing & Promotions agent definition."""
+
+from agent_framework import Agent
+
+from pricing_promotions.prompts import get_system_prompt
+from pricing_promotions.tools import (
+    check_bundle_eligibility,
+    get_active_deals,
+    optimize_cart,
+    validate_coupon,
+)
+from shared.agent_factory import create_chat_client
+from shared.context import current_user_role
+from shared.context_providers import ECommerceContextProvider
+from shared.middleware import build_specialist_middleware
+from shared.tools.loyalty_tools import (
+    calculate_loyalty_discount,
+    get_loyalty_benefits,
+    get_loyalty_tier,
+)
+from shared.tools.pricing_tools import get_price_history
+from shared.tools.product_lookup_tools import find_product_by_name
+from shared.tools.user_tools import get_purchase_history, get_user_profile
+
+AGENT_TOOLS = [
+    find_product_by_name,
+    validate_coupon,
+    optimize_cart,
+    get_active_deals,
+    check_bundle_eligibility,
+    get_loyalty_tier,
+    calculate_loyalty_discount,
+    get_loyalty_benefits,
+    get_price_history,
+    get_user_profile,
+    get_purchase_history,
+]
+
+
+def create_pricing_promotions_agent() -> Agent:
+    """Create the Pricing & Promotions ChatAgent with all tools."""
+    return Agent(
+        client=create_chat_client(),
+        name="pricing-promotions",
+        description=(
+            "Coupon validation, cart optimization, loyalty discounts, bundle deals, and active promotions discovery."
+        ),
+        instructions=get_system_prompt(current_user_role.get() or "customer"),
+        tools=AGENT_TOOLS,
+        context_providers=[ECommerceContextProvider()],
+        middleware=build_specialist_middleware(),
+    )

@@ -1,0 +1,249 @@
+using System.Runtime.CompilerServices;
+using System.Threading.Channels;
+
+namespace ECommerceAgents.Shared.Context;
+
+/// <summary>
+/// Request-scoped identity + conversation context.
+/// </summary>
+/// <remarks>
+/// Mirrors Python's <c>shared/context.py</c> ContextVars. In .NET the
+/// equivalent is <see cref="AsyncLocal{T}"/>, which propagates across
+/// <c>async</c> boundaries within the same logical flow. Middleware
+/// populates the context from JWT claims or the inter-agent auth
+/// headers before the route handler runs; tools read it directly
+/// instead of threading parameters through call stacks.
+/// </remarks>
+public static class RequestContext
+{
+    private static readonly AsyncLocal<string?> _userEmail = new();
+    private static readonly AsyncLocal<string?> _userRole = new();
+    private static readonly AsyncLocal<string?> _sessionId = new();
+    private static readonly AsyncLocal<IReadOnlyList<HistoryEntry>?> _history = new();
+    private static readonly AsyncLocal<List<string>?> _invokedAgents = new();
+    private static readonly AsyncLocal<ChannelWriter<StreamFrame>?> _streamWriter = new();
+    private static readonly AsyncLocal<HashSet<int>?> _deliveredSteps = new();
+    private static readonly AsyncLocal<Dictionary<string, bool>?> _guardrailFlags = new();
+    private static readonly AsyncLocal<List<ExecutionStep>?> _steps = new();
+    // Running LLM spend for the current agent run, in USD. The .NET twin of
+    // Python's current_run_cost_usd ContextVar (issue #30).
+    private static readonly AsyncLocal<StrongBox<double>?> _runCostUsd = new();
+
+    public static string CurrentUserEmail
+    {
+        get => _userEmail.Value ?? string.Empty;
+        set => _userEmail.Value = value;
+    }
+
+    public static string CurrentUserRole
+    {
+        get => _userRole.Value ?? string.Empty;
+        set => _userRole.Value = value;
+    }
+
+    public static string CurrentSessionId
+    {
+        get => _sessionId.Value ?? string.Empty;
+        set => _sessionId.Value = value;
+    }
+
+    /// <summary>Running estimated LLM spend for this agent run, in USD.</summary>
+    public static double CurrentRunCostUsd => _runCostUsd.Value?.Value ?? 0.0;
+
+    /// <summary>Starts a fresh spend tally. Called once per agent run.</summary>
+    public static void ResetRunCost() => _runCostUsd.Value = new StrongBox<double>(0.0);
+
+    /// <summary>
+    /// Adds to the run's spend and returns the new total. Mutates a boxed
+    /// value rather than reassigning the AsyncLocal, so an increment made
+    /// deeper in the call tree is visible to the caller that started the run —
+    /// reassignment would only be seen by that branch and below.
+    /// </summary>
+    public static double AddRunCost(double usd)
+    {
+        var box = _runCostUsd.Value;
+        if (box is null)
+        {
+            box = new StrongBox<double>(0.0);
+            _runCostUsd.Value = box;
+        }
+        box.Value += usd;
+        return box.Value;
+    }
+
+    public static IReadOnlyList<HistoryEntry> CurrentHistory
+    {
+        get => _history.Value ?? Array.Empty<HistoryEntry>();
+        set => _history.Value = value;
+    }
+
+    /// <summary>
+    /// Specialist agents invoked so far during the current chat turn — appended to by
+    /// <c>OrchestratorTools.CallSpecialistAgent</c> on every A2A call. Backs the
+    /// streaming chat endpoint's dynamic <c>agents_involved</c>, mirroring Python's
+    /// <c>current_steps</c> ContextVar (<c>orchestrator/routes.py:655</c>). The
+    /// blocking endpoint doesn't need this — Python's own blocking handler never
+    /// grows <c>agents_involved</c> past <c>["orchestrator"]</c> either.
+    /// </summary>
+    public static IReadOnlyList<string> CurrentInvokedAgents =>
+        (IReadOnlyList<string>?)_invokedAgents.Value ?? Array.Empty<string>();
+
+    /// <summary>Records that <paramref name="agentName"/> was called via A2A during this request.</summary>
+    public static void RecordInvokedAgent(string agentName) => _invokedAgents.Value?.Add(agentName);
+
+    /// <summary>
+    /// Set only around a streaming chat turn (<c>ChatRoutes.StreamAsync</c>) — the
+    /// .NET analog of Python's <c>current_stream_queue</c> ContextVar
+    /// (<c>orchestrator/agent.py</c>). <c>OrchestratorTools.CallSpecialistAgent</c>
+    /// writes each specialist delta here as it streams from
+    /// <c>A2AClient.StreamAsync</c>, so the outer HTTP response can forward a live
+    /// preview of the specialist's answer (<c>event: delta</c>) while the
+    /// orchestrator's own agent run is still blocked awaiting that tool call.
+    /// <para>
+    /// Carries a <see cref="StreamFrame"/> rather than a bare string because a
+    /// delta is no longer the only thing worth forwarding mid-turn: a specialist's
+    /// tool steps travel the same way, and a channel of plain strings could only
+    /// ever produce one kind of SSE frame.
+    /// </para>
+    /// <c>null</c> outside a streaming turn (blocking <c>/api/chat</c>, or any
+    /// caller that never opened a scope) — every write site must treat that as a
+    /// safe no-op, matching <see cref="RecordInvokedAgent"/>'s own null-safety.
+    /// </summary>
+    public static ChannelWriter<StreamFrame>? CurrentStreamWriter => _streamWriter.Value;
+
+    /// <summary>Opens a scope for the duration of one streaming chat turn; restores the previous writer (normally none) on dispose.</summary>
+    public static IDisposable StreamScope(ChannelWriter<StreamFrame> writer)
+    {
+        var previous = _streamWriter.Value;
+        _streamWriter.Value = writer;
+        return new Disposable(() => _streamWriter.Value = previous);
+    }
+
+    /// <summary>
+    /// Guardrail detections recorded during the current request — the .NET
+    /// analog of Python's <c>current_guardrail_flags</c> ContextVar
+    /// (<c>shared/guardrails/flags.py</c>). Written by the injection-
+    /// detection and output-moderation pipeline stages
+    /// (<c>Shared/Agents/SpecialistPipeline.cs</c>); read by anything that
+    /// needs to know whether this request's turn tripped a guardrail
+    /// (currently: this repo's own tests — .NET has no eval harness yet to
+    /// assert on this the way Python's does).
+    /// </summary>
+    public static IReadOnlyDictionary<string, bool> CurrentGuardrailFlags =>
+        (IReadOnlyDictionary<string, bool>?)_guardrailFlags.Value ?? EmptyGuardrailFlags;
+
+    private static readonly IReadOnlyDictionary<string, bool> EmptyGuardrailFlags = new Dictionary<string, bool>();
+
+    /// <summary>Records a guardrail flag for the current request. No-op outside a <see cref="Scope"/>.</summary>
+    public static void SetGuardrailFlag(string key, bool value) => (_guardrailFlags.Value ??= new())[key] = value;
+
+    /// <summary>
+    /// Agentic-timeline steps recorded during the current request — the .NET
+    /// analog of Python's <c>current_steps</c> ContextVar
+    /// (<c>shared/agent_observability.py</c>). One entry per tool call, in
+    /// call order, appended by <c>SpecialistPipeline</c>'s step-recording
+    /// stage. A specialist process tags its own entries with
+    /// <c>Agent: null</c> (it only knows about itself); the orchestrator's
+    /// <c>A2AClient</c> fills in <see cref="ExecutionStep.Agent"/> when it
+    /// merges a specialist's returned steps into its own list — matching
+    /// Python's "specialists record un-tagged, the orchestrator tags them on
+    /// the way back" split described in <c>agent_observability.py</c>'s
+    /// module docstring.
+    /// </summary>
+    public static IReadOnlyList<ExecutionStep> CurrentSteps =>
+        (IReadOnlyList<ExecutionStep>?)_steps.Value ?? Array.Empty<ExecutionStep>();
+
+    /// <summary>Appends one step to the current request. No-op outside a <see cref="Scope"/>.</summary>
+    public static void RecordStep(ExecutionStep step) => _steps.Value?.Add(step);
+
+    /// <summary>
+    /// Marks the most recently recorded step as already sent to the browser.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A specialist's steps are forwarded live by <c>A2AClient.MergeReturnedSteps</c>
+    /// as they arrive; the orchestrator's own steps are not. <c>ChatRoutes</c> then
+    /// emits whatever is left at the end of the run, and needs to know which is which
+    /// or it sends the specialist's rows twice.
+    /// </para>
+    /// <para>
+    /// Tracked by index rather than by a count of delivered steps, because delivered
+    /// steps are <em>not</em> a prefix of the list. Two specialist calls interleave as
+    /// [spec1 (sent), orchestrator (not), spec2 (sent), orchestrator (not)], so
+    /// "skip the first N" would drop the wrong rows. Tracked here rather than as a
+    /// field on <see cref="ExecutionStep"/> so a delivery detail never reaches the
+    /// persisted timeline — the equivalent of Python popping its <c>_live</c> marker
+    /// before the metadata is written.
+    /// </para>
+    /// </remarks>
+    public static void MarkLastStepDelivered()
+    {
+        var steps = _steps.Value;
+        if (steps is { Count: > 0 })
+        {
+            (_deliveredSteps.Value ??= new HashSet<int>()).Add(steps.Count - 1);
+        }
+    }
+
+    /// <summary>Whether the step at <paramref name="index"/> has already been streamed.</summary>
+    public static bool IsStepDelivered(int index) => _deliveredSteps.Value?.Contains(index) ?? false;
+
+    public static IDisposable Scope(string email, string role, string sessionId, IReadOnlyList<HistoryEntry>? history = null)
+    {
+        var previous = (
+            Email: _userEmail.Value,
+            Role: _userRole.Value,
+            Session: _sessionId.Value,
+            History: _history.Value,
+            InvokedAgents: _invokedAgents.Value,
+            GuardrailFlags: _guardrailFlags.Value,
+            Steps: _steps.Value,
+            DeliveredSteps: _deliveredSteps.Value
+        );
+        _userEmail.Value = email;
+        _userRole.Value = role;
+        _sessionId.Value = sessionId;
+        _history.Value = history ?? Array.Empty<HistoryEntry>();
+        _invokedAgents.Value = new List<string>();
+        _guardrailFlags.Value = new Dictionary<string, bool>();
+        _steps.Value = new List<ExecutionStep>();
+        _deliveredSteps.Value = new HashSet<int>();
+        return new Disposable(() =>
+        {
+            _userEmail.Value = previous.Email;
+            _userRole.Value = previous.Role;
+            _sessionId.Value = previous.Session;
+            _history.Value = previous.History;
+            _invokedAgents.Value = previous.InvokedAgents;
+            _guardrailFlags.Value = previous.GuardrailFlags;
+            _steps.Value = previous.Steps;
+            _deliveredSteps.Value = previous.DeliveredSteps;
+        });
+    }
+
+    private sealed class Disposable(Action dispose) : IDisposable
+    {
+        private readonly Action _dispose = dispose;
+
+        public void Dispose() => _dispose();
+    }
+}
+
+/// <summary>One entry in the forwarded conversation history (A2A payload shape).</summary>
+public sealed record HistoryEntry(string Role, string Content);
+
+/// <summary>
+/// One agentic-timeline step — the .NET twin of Python's step dict
+/// (<c>shared/agent_observability.py::StepRecorderMiddleware</c>). <c>Agent</c>
+/// is null when a specialist records its own step (it doesn't know its own
+/// name in this context) and filled in by the orchestrator's <c>A2AClient</c>
+/// when merging a specialist's returned steps into its own timeline.
+/// </summary>
+public sealed record ExecutionStep(
+    string ToolName,
+    object? ToolInput,
+    object? ToolOutput,
+    string Status,
+    int DurationMs,
+    string? Agent = null
+);

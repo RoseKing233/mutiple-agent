@@ -1,0 +1,43 @@
+[project]
+name = "ecommerce-mcp-product"
+version = "0.1.0"
+description = "Standalone MCP server exposing e-commerce product catalog data (search, details, comparison, price history)"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+keywords = ["mcp", "model-context-protocol", "e-commerce", "product", "fastmcp"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+]
+dependencies = [
+    "mcp[cli]>=1.27.0,<2",  # 2.0.0 relocates mcp.server.fastmcp; pin below it until migrated
+    "asyncpg>=0.30",
+    "uvicorn>=0.34",
+    "pyjwt[crypto]>=2.10.1",
+]
+
+[project.scripts]
+ecommerce-mcp-product = "ecommerce_mcp_product.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ecommerce_mcp_product"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = ["--strict-markers", "-ra"]
+markers = [
+    "integration: tests that require a live Postgres container (via testcontainers)",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120

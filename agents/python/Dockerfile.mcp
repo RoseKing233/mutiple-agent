@@ -1,0 +1,73 @@
+# ============================================================
+# E-Commerce Agents — MCP Server Dockerfile
+# Build context: ./agents/python  (workspace root)
+#
+# Each MCP server is a standalone, independently publishable package.
+# This Dockerfile installs only the target package and its dependencies,
+# producing a lean image that does NOT include the main agent application.
+#
+# Usage:
+#   docker build -f Dockerfile.mcp \
+#     --build-arg MCP_PACKAGE=ecommerce-mcp-product \
+#     --build-arg MCP_DIR=packages/mcp-product \
+#     --build-arg MCP_MODULE=ecommerce_mcp_product.server:app \
+#     --build-arg MCP_PORT=9000 \
+#     -t mcp-product .
+# ============================================================
+
+FROM python:3.12-slim AS base
+
+# curl for healthcheck
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends gcc libpq-dev curl && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+# Create non-root user
+RUN groupadd -r mcp && useradd -r -g mcp -d /app -s /sbin/nologin mcp
+
+WORKDIR /app
+
+# ── Build args ──────────────────────────────────────────────
+ARG MCP_PACKAGE=ecommerce-mcp-product
+ARG MCP_DIR=packages/mcp-product
+ARG MCP_MODULE=ecommerce_mcp_product.server:app
+ARG MCP_PORT=9000
+
+# ── Install only the target package (uses workspace-aware lock) ─
+# `uv sync` builds this package's own editable wheel as part of the sync,
+# and hatchling needs the real `src/` tree (plus the README its pyproject.toml
+# points at) present to do that correctly — copying only pyproject.toml here
+# and `src/` in a later layer produces a *silently broken* editable install
+# (dist-info written, but no .pth/finder redirect at all, so the module
+# 404s at import time). So the source has to land before `uv sync` runs,
+# giving up the "source changes don't invalidate the deps layer" caching
+# trick — an acceptable tradeoff for a package this small.
+COPY pyproject.toml uv.lock ./
+COPY ${MCP_DIR} ${MCP_DIR}
+
+# Install only the target package + its deps (--package scopes the install).
+# --frozen: never re-resolve; --no-dev: skip test/lint tools.
+RUN uv sync --frozen --no-dev --package ${MCP_PACKAGE}
+
+RUN chown -R mcp:mcp /app
+
+ENV MCP_MODULE=${MCP_MODULE}
+ENV MCP_PORT=${MCP_PORT}
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+ENV UV_CACHE_DIR=/app/.cache/uv
+
+USER mcp
+
+EXPOSE ${MCP_PORT}
+
+# When MCP_AUTH_ENABLED=true, /mcp is wrapped in RequireAuthMiddleware and
+# always 401s — point the healthcheck at the SDK's auto-mounted,
+# unauthenticated protected-resource metadata endpoint instead.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+    CMD sh -c 'if [ "$MCP_AUTH_ENABLED" = "true" ]; then curl -sf "http://localhost:${MCP_PORT}/.well-known/oauth-protected-resource/mcp"; else curl -sf "http://localhost:${MCP_PORT}/mcp"; fi'
+
+CMD uv run --no-project uvicorn ${MCP_MODULE} --host 0.0.0.0 --port ${MCP_PORT}

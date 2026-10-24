@@ -1,0 +1,185 @@
+name: Tutorials
+
+# Keeps the tutorials/ chapters honest: every README documents
+#   uv sync --project tutorials
+#   uv run --project tutorials python tutorials/<chapter>/python/main.py
+#   uv run --project tutorials pytest tutorials/<chapter>/python/tests -v
+# and this workflow runs `pytest -m "not integration"` on every push and PR
+# so a chapter can't silently stop collecting or start failing without CI
+# going red.
+#
+# 14 of the 21 tutorial test files are marked `@pytest.mark.integration` and
+# require a live OPENAI_API_KEY / AZURE_OPENAI_* key to run — this job
+# intentionally does NOT provide one, so those specific tests are collected
+# but skipped/deselected here, not deleted or unmarked. Every one of those 14
+# chapters ALSO ships a keyless replay-based test (unmarked, so it IS covered
+# by "not integration") that plays back a committed fixture via
+# `LLM_PROVIDER=replay` — see tutorials/_shared/replay_client.py and
+# tutorials/01-first-agent/ for the reference implementation. That's what
+# lets this job exercise the "hits an LLM and gets a real answer" assertion
+# on every PR with zero secrets configured.
+#
+# PYTHONHASHSEED is pinned because chapter 14's HandoffBuilder mesh
+# construction is sensitive to Python's per-process hash randomization,
+# which changes what gets built into later handoff turns and therefore the
+# replay fixture hash for those turns (see
+# tutorials/14-handoff-orchestration/python/tests/test_handoff.py's module
+# docstring). Fixtures were recorded with PYTHONHASHSEED=0; without the same
+# pin here, that one chapter's replay test would flake. No other chapter
+# needs this — their participant lists are consumed in list order, not
+# through anything hash-order-sensitive.
+#
+# Chapter 20b (DevUI) ships its own pyproject.toml and chapter 22
+# (Group-Chat Debate) imports the production workflows.group_chat module out of
+# agents/python — see tutorials/README.md's "Running a chapter" section. Both are
+# covered here: 20b's tests are collected because agent-framework-devui is also a
+# dependency of tutorials/pyproject.toml, and 22's tests put agents/python on
+# sys.path themselves so they collect under this project like any other chapter.
+#
+# Chapter 22 previously had no tests of its own, on the reasoning that
+# agents/python/tests/test_workflow_group_chat.py covered it. That covered the
+# MODULE, not the chapter: the demo's own panelists, its synthesizer, and the
+# claim the chapter is built on — that a later panelist sees earlier turns —
+# were untested, and that claim is invisible from the demo's output.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tutorials-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tutorials-tests:
+    name: Tutorials · pytest (non-integration)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # See the top-of-file comment — pins reproducible replay for chapter 14.
+      PYTHONHASHSEED: "0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Sync dependencies
+        working-directory: tutorials
+        run: uv sync --frozen --extra dev
+
+      - name: Run pytest (deterministic chapters only)
+        run: uv run --project tutorials pytest tutorials/ -m "not integration"
+
+  tutorials-lint:
+    name: Tutorials · ruff check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Sync dependencies
+        working-directory: tutorials
+        run: uv sync --frozen --extra dev
+
+      - name: ruff check
+        run: uv run --project tutorials ruff check tutorials/
+
+  tutorials-dotnet-build:
+    name: Tutorials · dotnet build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      # 62 tutorial .csproj files across 31 chapters. Until #20 *no CI job built
+      # any of them* — the .NET half of the series shipped unverified while the
+      # Python half had three gates, so a chapter whose C# stopped compiling
+      # would have gone unnoticed indefinitely.
+      #
+      # NuGetAudit is off for the same repo-wide reason it is off elsewhere:
+      # a pre-existing transitive advisory is escalated to an error by default
+      # and is unrelated to whether a chapter's code is correct.
+      - name: Build every tutorial project
+        run: |
+          fail=0
+          for proj in $(find tutorials -name '*.csproj' | sort); do
+            echo "::group::$proj"
+            dotnet build "$proj" --nologo -v minimal -p:NuGetAudit=false || fail=1
+            echo "::endgroup::"
+          done
+          exit $fail
+
+  tutorials-dotnet-test:
+    name: Tutorials · dotnet test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      # Kept separate from the build job so a compile break and a test failure
+      # are distinguishable at a glance.
+      #
+      # Every chapter that ships .NET code now has a test project, and the
+      # coverage job below fails if that ever stops being true — the status
+      # table is derived from disk, so a chapter cannot quietly regress to
+      # "code, no tests" while still claiming otherwise.
+      #
+      # These need no API key: each chapter's tests drive a scripted IChatClient
+      # (tutorials/_shared/dotnet/ScriptedChatClient.cs).
+      - name: Run every tutorial test project
+        run: |
+          fail=0
+          for proj in $(find tutorials -iname '*.Tests.csproj' | sort); do
+            echo "::group::$proj"
+            dotnet test "$proj" --nologo -v minimal -p:NuGetAudit=false || fail=1
+            echo "::endgroup::"
+          done
+          exit $fail
+
+  tutorials-contract:
+    name: Tutorials · chapter contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      # Phase 4c + 4d restored all 24 chapters from a report-only
+      # launcher-stub state to a real, merge-blocking gate on every chapter.
+      - name: Chapter contract check
+        run: python3 scripts/check_tutorial_readmes.py --check
+
+      # The language-coverage table in tutorials/README.md is generated from
+      # what is on disk. It claimed to be generated long before it was, and
+      # drifted — describing chapters as ported that were not. This check is
+      # what makes the claim true: add or remove a test project and the table
+      # must be regenerated, or the build fails.
+      - name: Coverage table is not stale
+        run: python3 scripts/check_tutorial_coverage.py --check

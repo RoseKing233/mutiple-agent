@@ -1,0 +1,108 @@
+[project]
+name = "e-commerce-agents"
+version = "1.3.0"
+description = "E-Commerce Multi-Agent Platform built with Microsoft Agent Framework"
+requires-python = ">=3.12"
+dependencies = [
+    # Microsoft Agent Framework — pinned to the latest stable release of
+    # each package actually used. Depend on agent-framework-core directly
+    # (not the agent-framework meta-package's [all] extra) — [all] pulls in
+    # provider integrations that are still pre-release-only and make the
+    # resolution unsatisfiable without --prerelease=allow. orchestrations is
+    # a direct dependency because orchestrator/handoff.py imports
+    # HandoffBuilder from it. a2a/devui are not used (this repo's "A2A
+    # protocol" is a hand-rolled HTTP contract in shared/agent_host.py, not
+    # the agent-framework-a2a SDK package).
+    "agent-framework-core==1.14.0",
+    "agent-framework-openai==1.13.0",
+    "agent-framework-orchestrations==1.1.0",
+    # Web
+    "fastapi>=0.115",
+    "uvicorn>=0.34",
+    "starlette>=0.45",
+    "sse-starlette>=2.2",
+    # Database
+    "asyncpg>=0.30",
+    "pgvector>=0.3",
+    # Config & Validation
+    "pydantic>=2.10",
+    "pydantic-settings>=2.7",
+    "pyyaml>=6.0",
+    # Auth
+    "PyJWT>=2.9",
+    "bcrypt>=4.2",
+    # HTTP & LLM
+    "httpx>=0.28",
+    "openai>=1.60",
+    "tiktoken>=0.8",
+    # Telemetry (from day 1)
+    "opentelemetry-sdk>=1.28",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.28",
+    "opentelemetry-exporter-otlp-proto-http>=1.28",
+    "opentelemetry-instrumentation-fastapi>=0.49b0",
+    "opentelemetry-instrumentation-starlette>=0.49b0",
+    "opentelemetry-instrumentation-httpx>=0.49b0",
+    "opentelemetry-instrumentation-asyncpg>=0.49b0",
+    "opentelemetry-instrumentation-logging>=0.49b0",
+    "opentelemetry-instrumentation-openai-v2>=0.1",
+    "mcp[cli]>=1.27.0,<2",  # 2.0.0 relocates mcp.server.fastmcp; pin below it until migrated
+    "authlib>=1.6",
+    # Cache / rate limiting — Redis was already provisioned in
+    # docker-compose.yml and REDIS_URL declared in shared/config.py, but
+    # nothing in agents/python actually used it until shared/rate_limit.py
+    # (Phase 6.3). redis-py's async client (redis.asyncio) ships in the
+    # base package, no separate async extra needed as of 4.2+.
+    "redis>=5.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=5.0",
+    "testcontainers[postgres,redis]>=4.8",
+    "ruff>=0.8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.workspace]
+members = ["packages/mcp-product", "packages/mcp-inventory"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["shared", "orchestrator", "product_discovery", "order_management", "pricing_promotions", "review_sentiment", "inventory_fulfillment", "auth_server"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "-ra",
+]
+markers = [
+    "integration: tests that require a live Postgres container (via testcontainers)",
+    "slow: tests that take more than a few seconds",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["shared", "orchestrator", "product_discovery", "order_management", "pricing_promotions", "review_sentiment", "inventory_fulfillment", "auth_server"]
+omit = ["**/tests/*", "**/__init__.py"]
+
+[tool.coverage.report]
+fail_under = 70
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]

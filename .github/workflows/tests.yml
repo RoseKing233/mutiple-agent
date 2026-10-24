@@ -1,0 +1,233 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  # Called by release.yml so a version tag re-runs this whole suite against the
+  # tagged commit before anything is published. GitHub Actions has no
+  # cross-workflow `needs:`, so `workflow_call` is the only way to express it.
+  workflow_call:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-tests:
+    name: Python · pytest + coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Sync dependencies
+        working-directory: agents/python
+        # --all-packages pulls in the uv workspace members (ecommerce-mcp-product,
+        # ecommerce-mcp-inventory) — required so tests/test_mcp_oauth_integration.py
+        # can import them; without it, collection fails with ModuleNotFoundError.
+        run: uv sync --all-packages --extra dev
+
+      - name: Run pytest with coverage
+        working-directory: agents/python
+        run: |
+          uv run pytest \
+            --cov \
+            --cov-config=.coveragerc.ci \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --cov-fail-under=70
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-coverage
+          path: agents/python/coverage.xml
+          retention-days: 30
+
+  mcp-package-tests:
+    name: MCP packages · smoke tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Registration/import smoke tests only — no testcontainer Postgres needed.
+    # Integration-marked tests are skipped here (`-m "not integration"`). They
+    # are NOT run by any other scheduled job today — evals.yml is
+    # workflow_dispatch-only and only runs `evals.run_evals`, not pytest, so it
+    # never exercises these packages' integration tests. A PR-blocking smoke
+    # gate that would cover this is planned but not yet implemented.
+    strategy:
+      matrix:
+        package:
+          - { name: ecommerce-mcp-product, dir: packages/mcp-product }
+          - { name: ecommerce-mcp-inventory, dir: packages/mcp-inventory }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Sync package deps
+        working-directory: agents/python
+        run: uv sync --frozen --all-packages --extra dev
+
+      - name: Run smoke tests (skip integration)
+        working-directory: agents/python
+        run: uv run pytest ${{ matrix.package.dir }}/tests -m "not integration" -v
+
+  dotnet-tests:
+    name: .NET · dotnet test + coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore
+        working-directory: agents/dotnet
+        run: dotnet restore ECommerceAgents.sln
+
+      - name: Build
+        working-directory: agents/dotnet
+        run: dotnet build ECommerceAgents.sln --configuration Release --no-restore
+
+      - name: Test
+        working-directory: agents/dotnet
+        run: |
+          dotnet test ECommerceAgents.sln \
+            --configuration Release \
+            --no-build \
+            --logger "trx;LogFileName=test-results.trx" \
+            --collect:"XPlat Code Coverage" \
+            --results-directory TestResults
+
+      - name: Upload .NET test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dotnet-test-results
+          path: agents/dotnet/TestResults/
+          retention-days: 30
+
+  web-tests:
+    name: Web · typecheck + lint + test + build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install dependencies
+        # pnpm-workspace.yaml's committed allowBuilds denies msw/sharp/
+        # unrs-resolver's postinstall scripts explicitly (see #7) — without
+        # it, a fresh install hits pnpm's interactive build-approval gate
+        # and fails outright in a non-interactive CI shell.
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm exec tsc --noEmit
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Unit / component tests
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+  # Playwright E2E is intentionally not run in CI. It needs the full live
+  # stack (docker compose: Postgres + Redis + all agents) plus a real
+  # OPENAI_API_KEY (the LLM is never mocked), which is impractical and costly
+  # for every push. The specs remain under web/e2e/ — run them locally against
+  # a running app with: cd web && pnpm exec playwright test
+
+  workflow-visualization-drift:
+    name: Workflow diagrams · drift check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Gated on an explicit flag until visualization lands in Phase 7.
+    if: ${{ vars.WORKFLOW_VISUALIZATION_ON_BUILD == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Sync deps
+        working-directory: agents/python
+        run: uv sync --extra dev
+
+      - name: Regenerate diagrams
+        working-directory: agents/python
+        run: uv run python -m scripts.visualize_workflows
+
+      - name: Fail on uncommitted diff
+        run: |
+          if ! git diff --quiet docs/workflows/; then
+            echo "::error::workflow diagrams are out of date. Re-run scripts/visualize_workflows.py and commit."
+            git diff docs/workflows/
+            exit 1
+          fi
+
+  # ── Publish rolling images, only after the suite is green ──────────────────
+  #
+  # This is the gate. build-images.yml no longer decides to publish anything on
+  # its own; it exposes `workflow_call` and this job is what grants it, after
+  # `needs:` on every test job above.
+  #
+  # Deliberately NOT in `needs`:
+  #   workflow-visualization-drift  — gated behind vars.WORKFLOW_VISUALIZATION_ON_BUILD,
+  #     so it is skipped on most runs, and a skipped dependency would skip this job too.
+  #   evals.yml / tutorials.yml     — they gate the pull request, not the image. Tutorial
+  #     CI has nothing to do with the contents of these images, and coupling them means a
+  #     broken tutorial chapter blocks a security fix from shipping.
+  publish-main:
+    name: Publish :main images
+    needs: [python-tests, mcp-package-tests, dotnet-tests, web-tests]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/build-images.yml
+    with:
+      publish: true
+      tag_mode: main
+    secrets: inherit
