@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from typing import Annotated
+from uuid import uuid4
 
 import httpx
 from agent_framework import Agent, tool
@@ -24,6 +25,7 @@ from shared.factory import parse_agent_registry
 from shared.http_resilience import ResilientAsyncTransport
 from shared.middleware import build_specialist_middleware
 from shared.oauth.service_client import build_a2a_headers
+from shared.sse import read_events
 from shared.telemetry import a2a_call_span
 
 logger = logging.getLogger(__name__)
@@ -72,6 +74,7 @@ async def call_specialist_agent(
 
     stream_queue = current_stream_queue.get()
     headers = await build_a2a_headers()
+    headers["x-agent-request-id"] = str(uuid4())
     request_body = {"message": message}
 
     with a2a_call_span("orchestrator", agent_name, url):
@@ -83,7 +86,6 @@ async def call_specialist_agent(
         if stream_queue is not None:
             try:
                 chunks: list[str] = []
-                current_event: str = "data"
                 async with httpx.AsyncClient(timeout=60, transport=_A2A_TRANSPORT) as client:
                     async with client.stream(
                         "POST",
@@ -92,17 +94,7 @@ async def call_specialist_agent(
                         headers=headers,
                     ) as resp:
                         resp.raise_for_status()
-                        async for line in resp.aiter_lines():
-                            if line.startswith("event: "):
-                                current_event = line[7:].strip()
-                                continue
-                            if not line:
-                                # blank line = SSE frame boundary
-                                current_event = "data"
-                                continue
-                            if not line.startswith("data: "):
-                                continue
-                            payload = line[6:]
+                        async for current_event, payload in read_events(resp.aiter_lines()):
                             if current_event == "step":
                                 # Merge specialist tool-call step into the
                                 # shared current_steps for this request, and
@@ -128,7 +120,6 @@ async def call_specialist_agent(
                                     await stream_queue.put(("frame", "step", step_data))
                                 except (json.JSONDecodeError, ValueError):
                                     pass
-                                current_event = "data"
                                 continue
                             if payload == "[DONE]":
                                 break

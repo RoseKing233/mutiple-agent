@@ -60,6 +60,7 @@ from shared.db import get_pool
 from shared.grounding.ledger import reset_grounding_ledger
 from shared.rate_limit import rate_limit_chat
 from shared.session import get_history_as_dicts, get_history_provider
+from shared.sse import text_event
 from shared.usage_db import UsageTimer, log_agent_usage, log_execution_step
 
 from .legacy import optional_auth
@@ -515,7 +516,6 @@ async def chat_stream(
             run_metadata: dict[str, Any] = {}
 
             async def _run_mode_task() -> None:
-                reset_steps()
                 reset_grounding_ledger()
                 with agent_run_span("orchestrator"):
                     try:
@@ -610,6 +610,11 @@ async def chat_stream(
                 agents_involved[:] = final_agents_involved
                 await queue.put(None)  # sentinel
 
+        # ContextVars assignments in a child task do not propagate to its
+        # parent. Bind the mutable step bucket BEFORE spawning so live steps
+        # and later persistence see the same list.
+        if mode.name == "tool":
+            reset_steps()
         agent_task = _asyncio.create_task(_run_mode_task())
 
         try:
@@ -632,13 +637,13 @@ async def chat_stream(
                         )
                         timeout_msg = " [stream timed out — please retry]"
                         full_response.append(timeout_msg)
-                        yield f"data: {timeout_msg}\n\n"
+                        yield text_event(timeout_msg)
                         agent_task.cancel()
                         break
 
                     try:
                         item = await _asyncio.wait_for(queue.get(), timeout=0.1)
-                    except _asyncio.TimeoutError:
+                    except TimeoutError:
                         continue
 
                     if item is None:
@@ -652,11 +657,11 @@ async def chat_stream(
                                 truncated = True
                                 marker = " [response truncated at limit]"
                                 full_response.append(marker)
-                                yield f"data: {marker}\n\n"
+                                yield text_event(marker)
                             else:
                                 full_bytes += chunk_bytes
                                 full_response.append(chunk)
-                                yield f"data: {chunk}\n\n"
+                                yield text_event(chunk)
 
                     elif item[0] == "delta":
                         # Specialist token — forward immediately to the browser as
@@ -674,7 +679,7 @@ async def chat_stream(
                         # arriving (see web/src/lib/api.ts's onDeltaChunk).
                         _agent_src: str = item[1]
                         delta_chunk: str = item[2]
-                        yield f"event: delta\ndata: {delta_chunk}\n\n"
+                        yield text_event(delta_chunk, "delta")
 
                     elif item[0] == "frame":
                         # Structured event from a non-"tool" mode (node/handoff/
@@ -747,7 +752,8 @@ async def chat_stream(
             steps = []
             stream_usage = {}
 
-        yield f"event: metadata\ndata: {json.dumps({'conversation_id': conversation_id, 'agents_involved': agents_involved})}\n\n"
+        metadata = {"conversation_id": conversation_id, "agents_involved": agents_involved}
+        yield text_event(json.dumps(metadata), "metadata")
 
         # Persist assistant message + timeline — authed only (anonymous
         # storefront chat has no conversation to write to).

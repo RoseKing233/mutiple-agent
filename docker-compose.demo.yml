@@ -113,6 +113,9 @@ services:
     command: uv run --no-project python -m scripts.seed
     volumes:
       - ./scripts:/app/scripts:ro
+      - ./docker/postgres/migrations:/app/migrations:ro
+      - ./agents/python/shared/db_migrations.py:/app/shared/db_migrations.py:ro
+      - ./agents/python/shared/manager_accounts.py:/app/shared/manager_accounts.py:ro
     depends_on:
       db:
         condition: service_healthy

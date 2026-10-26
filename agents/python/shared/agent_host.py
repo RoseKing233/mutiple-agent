@@ -23,6 +23,9 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from shared.context import current_agent_request_id
+from shared.sse import text_event
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -48,14 +51,22 @@ def _history_as_maf_messages(history: list[dict] | None, user_message: str) -> l
     return messages
 
 
-def _run_options() -> dict[str, Any]:
+def _run_options(user_message: str = "", agent_name: str = "") -> dict[str, Any]:
     """Per-run chat options applied to every agent. Pins the sampling
     temperature so the same query yields consistent answers (the provider
     default of ~1.0 makes identical prompts diverge — see LLM_TEMPERATURE).
     """
     from shared.config import settings
+    from shared.context import current_user_role
+    from shared.forecasting.chat_policy import required_report_tool
 
-    return {"temperature": settings.LLM_TEMPERATURE}
+    options: dict[str, Any] = {"temperature": settings.LLM_TEMPERATURE}
+    required = required_report_tool(user_message, agent_name, current_user_role.get())
+    if required:
+        # MAF resets a required choice after executing the first tool, then
+        # resumes its normal loop. No custom retry/tool-calling loop is used.
+        options["tool_choice"] = {"mode": "required", "required_function_name": required}
+    return options
 
 
 async def _run_agent_native(
@@ -75,7 +86,7 @@ async def _run_agent_native(
     plain ``str`` return can't carry that side-channel data.
     """
     messages = _history_as_maf_messages(history, user_message)
-    response = await agent.run(messages, options=_run_options())
+    response = await agent.run(messages, options=_run_options(user_message, getattr(agent, "name", "")))
     if metadata_box is not None:
         metadata_box.update(getattr(response, "additional_properties", None) or {})
         usage = getattr(response, "usage_details", None)
@@ -102,7 +113,7 @@ async def _run_agent_native_stream(
     here just returns that cached result.
     """
     messages = _history_as_maf_messages(history, user_message)
-    stream = agent.run(messages, stream=True, options=_run_options())
+    stream = agent.run(messages, stream=True, options=_run_options(user_message, getattr(agent, "name", "")))
     async for update in stream:
         text = getattr(update, "text", None)
         if text:
@@ -277,8 +288,12 @@ def create_agent_app(
 
             reset_steps()
             reset_grounding_ledger()
-            with agent_run_span(agent_name):
-                response_text = await _run_agent_native(agent, message, history=history)
+            request_token = current_agent_request_id.set(request.headers.get("x-agent-request-id", ""))
+            try:
+                with agent_run_span(agent_name):
+                    response_text = await _run_agent_native(agent, message, history=history)
+            finally:
+                current_agent_request_id.reset(request_token)
             # Return this specialist's captured tool steps so the orchestrator
             # can merge them into the live agentic timeline.
             steps = get_steps()
@@ -346,6 +361,7 @@ def create_agent_app(
                 return frames
 
             with agent_run_span(agent_name):
+                request_token = current_agent_request_id.set(request.headers.get("x-agent-request-id", ""))
                 try:
                     async for chunk in _run_agent_native_stream(agent, message, history=history):
                         # Flush before the chunk, not after: in a MAF tool loop
@@ -355,10 +371,12 @@ def create_agent_app(
                         # would hold each step back by one chunk for no reason.
                         for frame in _drain_new_steps():
                             yield frame
-                        yield f"data: {chunk}\n\n"
+                        yield text_event(chunk)
                 except Exception:
                     logger.exception("%s.message_stream_error", agent_name)
                     yield "data: [ERROR: agent processing failed]\n\n"
+                finally:
+                    current_agent_request_id.reset(request_token)
 
             # Anything that completed after the final chunk — a tool whose
             # result the model never got to narrate, or a run that produced no

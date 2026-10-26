@@ -33,6 +33,7 @@ export function CommandPalette() {
   const router = useRouter();
   const { isAdmin, user } = useAuth();
   const isSeller = user?.role === "seller" || isAdmin;
+  const isManager = user?.role === "store_manager";
 
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -40,13 +41,13 @@ export function CommandPalette() {
   const [recentOrders, setRecentOrders] = useState<RecentOrder[]>([]);
 
   const navItems = useMemo<NavItem[]>(
-    () => visibleGroups({ isAdmin, isSeller }).flatMap((g) => g.items),
-    [isAdmin, isSeller],
+    () => visibleGroups({ isAdmin, isSeller, isManager }).flatMap((g) => g.items),
+    [isAdmin, isSeller, isManager],
   );
 
   // Fetch recent orders when palette opens (top 5, no caching needed)
   useEffect(() => {
-    if (!open || !user) return;
+    if (!open || !user || isManager) return;
     api
       .getOrders()
       .then((r) => {
@@ -54,25 +55,25 @@ export function CommandPalette() {
         setRecentOrders(orders.slice(0, 5));
       })
       .catch(() => setRecentOrders([]));
-  }, [open, user]);
+  }, [open, user, isManager]);
 
   const allItems = useMemo<PaletteItem[]>(() => {
     const navPaletteItems: PaletteItem[] = navItems.map((nav) => ({
       kind: "nav",
       nav,
     }));
-    const scenarioPaletteItems: PaletteItem[] = DEMO_SCENARIOS.map((s) => ({
+    const scenarioPaletteItems: PaletteItem[] = (isManager ? [] : DEMO_SCENARIOS).map((s) => ({
       kind: "scenario",
       label: s.label,
       description: s.description,
       href: chatPromptHref(s.prompt),
     }));
-    const orderItems: PaletteItem[] = recentOrders.map((order) => ({
+    const orderItems: PaletteItem[] = (isManager ? [] : recentOrders).map((order) => ({
       kind: "order",
       order,
     }));
     return [...navPaletteItems, ...scenarioPaletteItems, ...orderItems];
-  }, [navItems, recentOrders]);
+  }, [navItems, recentOrders, isManager]);
 
   const filtered = useMemo<PaletteItem[]>(() => {
     const q = query.trim().toLowerCase();

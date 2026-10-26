@@ -12,6 +12,7 @@ import { ChatSentimentCard } from "./sentiment-card";
 import { ChatInventoryCard } from "./inventory-card";
 import { ChatPricingCard } from "./pricing-card";
 import { listItem } from "@/lib/motion";
+import { localAnalysisLink } from "@/lib/analysis-links";
 import {
   CardKind,
   validateCard,
@@ -37,7 +38,10 @@ const SANITIZE_SCHEMA = {
 
 function SanitisedMarkdown({ children }: { children: string }) {
   return (
-    <ReactMarkdown rehypePlugins={[[rehypeSanitize, SANITIZE_SCHEMA]]}>
+    <ReactMarkdown
+      rehypePlugins={[[rehypeSanitize, SANITIZE_SCHEMA]]}
+      components={{ a: ({ href, children }) => <a href={localAnalysisLink(href)}>{children}</a> }}
+    >
       {children}
     </ReactMarkdown>
   );

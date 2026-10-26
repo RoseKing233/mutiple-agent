@@ -19,6 +19,8 @@ export interface NavItem {
   icon: LucideIcon;
   adminOnly?: boolean;
   sellerOnly?: boolean;
+  managerOnly?: boolean;
+  shoppingOnly?: boolean;
   /** Shown for the cart count badge. */
   cartBadge?: boolean;
 }
@@ -36,12 +38,13 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     label: "Shop",
     items: [
-      { label: "Home", href: "/home", icon: LayoutDashboard },
+      { label: "Home", href: "/home", icon: LayoutDashboard, shoppingOnly: true },
       { label: "Chat", href: "/chat", icon: MessageSquare },
       { label: "Agents", href: "/agents", icon: Bot },
       { label: "Products", href: "/products", icon: ShoppingBag },
-      { label: "Cart", href: "/cart", icon: ShoppingCart, cartBadge: true },
-      { label: "Orders", href: "/orders", icon: Package },
+      { label: "Cart", href: "/cart", icon: ShoppingCart, cartBadge: true, shoppingOnly: true },
+      { label: "Orders", href: "/orders", icon: Package, shoppingOnly: true },
+      { label: "Analysis & Forecast", href: "/analysis", icon: BarChart3, managerOnly: true },
       { label: "Runs", href: "/runs", icon: Activity },
     ],
   },
@@ -66,10 +69,14 @@ export const NAV_GROUPS: NavGroup[] = [
 export function visibleGroups(opts: {
   isAdmin: boolean;
   isSeller: boolean;
+  isManager?: boolean;
 }): NavGroup[] {
   return NAV_GROUPS.map((group) => ({
     ...group,
+    label: opts.isManager && group.label === "Shop" ? "Store" : group.label,
     items: group.items.filter((item) => {
+      if (item.shoppingOnly && opts.isManager) return false;
+      if (item.managerOnly) return opts.isManager || opts.isAdmin;
       if (item.adminOnly) return opts.isAdmin;
       if (item.sellerOnly) return opts.isSeller;
       return true;
