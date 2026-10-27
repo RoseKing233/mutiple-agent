@@ -28,7 +28,8 @@
 1. **Suggestions 标签**：点 **Generate suggestions**，大约 12 秒后出现按优先级排好的建议卡片。每张卡片有类型（Restock / Overstock）、优先级、建议数量和仓库、AI 写的理由，以及依据（实时库存、预测销量、耗尽日期）。
    - 补货卡片可以先改数量和仓库，再点 **Accept & receive stock**，库存会立刻增加并记一笔流水。
    - **Reject** 只记录原因，不改库存。积压卡片点 Accept 也只记录决定，不改库存。
-2. **Stock 标签**：库存表（低库存排在前面，可以只看低库存）。点 **Manage** 可以做入库、出库、盘点（必须填原因），改补货阈值，删除空的库存行，下面能看到最近的流水。右上角可以给商品在某个仓库新建库存行。
+2. **Stock 标签**：库存表（低库存排在前面，可以只看低库存）。点 **Manage** 可以做入库、出库、盘点（必须填原因），改补货阈值，删除空的库存行，下面能看到最近的流水。
+   - Manage 里还可以**调仓**：选目标仓库、件数和原因，点 Transfer。目标仓库没有这个商品的库存行，会自动建一条，相当于把商品"添加到新仓库"。右上角可以给商品在某个仓库新建库存行。
 3. **Warehouses & products 标签**：仓库的新增、停用和重新启用（有货的仓库不能停用）；新增商品（可以带初始库存、选择是否立即上架）；商品的上架和下架。
 
 ### Chat 演示（经理账号，模式选 Tool Router）
@@ -83,6 +84,7 @@
 | POST | `/inventory` | `{product_id, warehouse_id, reorder_threshold?, initial_quantity?, request_id?}`；已存在返回 409 |
 | PATCH | `/inventory/{pid}/{wid}` | `{reorder_threshold}` |
 | POST | `/inventory/{pid}/{wid}/adjustments` | `{kind: manual_receipt / manual_issue / stock_count_adjustment, quantity, reason（≥3 个字）, request_id?}`；盘点时 `quantity` 是盘点得到的总数；库存不够返回 422 |
+| POST | `/inventory/transfers` | 调仓：`{product_id, from_warehouse_id, to_warehouse_id, quantity, reason, request_id?}`。目标仓库没有库存行会自动建一条；库存不够返回 422，源仓库没有库存行返回 404，同一个 request_id 重复提交不会重复调拨 |
 | DELETE | `/inventory/{pid}/{wid}` | 库存为 0 才能删 |
 | GET | `/inventory/{pid}/{wid}/movements` | 流水，最新的在前 |
 | GET / POST | `/warehouses` | 列表带总库存 / `{name, location, region}` |
@@ -95,7 +97,9 @@
 | GET | `/inventory-suggestions` | `status`（默认 pending，可以传 all）、`suggestion_type`、`product_id` |
 | POST | `/inventory-suggestions/{id}/decision` | `{decision: accept/reject, quantity?, warehouse_id?, note?}`；已经处理过的返回 409 |
 
-新增流水类型：`manual_receipt`（正数）、`manual_issue`（负数）、`stock_count_adjustment`（正负都行）、`restock_receipt`（接受建议，正数）。
+新增流水类型：`manual_receipt`（正数）、`manual_issue`（负数）、`stock_count_adjustment`（正负都行）、`restock_receipt`（接受建议，正数）、`transfer_in` / `transfer_out`（调仓的两笔流水，时间相同，先记调入再记调出，所以全店合计库存不会短暂变成 0，避免 Jingtong 的预测误判为缺货）。
+
+新增商品时如果没有指定初始库存，会自动在**第一个启用中的仓库**（按名称排序）建一条 0 件的库存行，保证每个商品都会出现在库存页，之后可以直接入库。
 
 ## 6. 给后面同学的接入说明
 

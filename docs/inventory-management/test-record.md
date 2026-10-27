@@ -120,3 +120,16 @@ AI 解释示例（修复后，原文）：
 
 ### 4.4 没有做的
 - **页面没有在浏览器里逐个点击验收**，只确认了生产构建能返回 200，接口都在上面验过了。建议交接前由人打开 `/inventory` 点一遍。
+
+## 5. 补充测试（10-27 下午：新品默认库存行、调仓）
+
+新增 3 项，`test_inventory_management.py` 现在共 **31 项**；和营销测试一起跑 **40 passed**。
+
+| 测试 | 验证内容 |
+|---|---|
+| `test_transfer_moves_stock_creates_destination_row_and_is_idempotent` | 把 East 的 30 件全部调到 West（West 原来没有库存行，自动新建）；两个仓库的余额都和流水一致；重复提交返回 replayed；流水顺序是 transfer_in 在前、transfer_out 在后，而且时间相同（全店合计库存不会变成 0） |
+| `test_transfer_rejects_bad_requests` | 源仓库和目标仓库相同返回 422；库存不够返回 422；源仓库没有库存行返回 404，而且失败时**不会留下自动新建的目标库存行**（整体回滚）；customer 返回 403 |
+| `test_product_without_stock_gets_zero_row_in_first_warehouse` | 不传 stock 新建商品，自动在按名称排第一的仓库（East）建一条 0 件的行；库存页能搜到；之后可以直接入库 12 件 |
+
+真实环境（Docker 全栈）：Atomic Habits 从 Central 调 2 件到 East，Central 23→21，East 12→14；同一个 request_id 再发一次，返回 `replayed: true`，库存不变。
+前端：`tsc`、`eslint` 通过，前端和 orchestrator 容器已重新构建。

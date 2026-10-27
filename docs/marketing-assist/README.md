@@ -16,10 +16,17 @@
 ## 2. 怎么演示
 
 1. 用经理账号登录，进入 `/inventory` → Warehouses & products → 展开 New product。
-2. 先填 Name 和 Category（这两个必填），最好再写一句描述、填几个卖点（用逗号隔开）。
-3. 点 **Generate title & copy**，约 4 秒出现 3 张候选卡片，点其中一版的 Use this version。
-4. 选好风格，点 **Generate images**，约 10 秒出现 2 张图，点 Use this image，表单里会显示预览。
-5. 填价格，可以选一个仓库和初始库存，点 Save product。下面的商品列表和顾客端都能看到新商品和它的图片。
+2. **先填基本信息**（带 * 的必填；空着离开输入框，或者点按钮时还没填，输入框会变红）：
+   - Name *
+   - Category *：下拉选择；没有合适的，选 "Other (add a new category)…" 再输入新类别
+   - Brand（选填）
+   - Price *
+   - Description *：AI 生成文案时只能用这里写的数字，所以规格尽量写具体
+3. 下方的 **AI 营销辅助**（全部选填）：
+   - **文案**：卖点（Selling points，用逗号隔开）、目标人群（Audience）、语气（Tone），点 **Generate title & copy**，约 4 秒出 3 版，点 Use this version。
+   - **图片**：风格（Image style）、画面描述（Image scene，写图片里要出现什么），点 **Generate images**，约 10 秒出 2 张，点 Use this image。
+   - 没填 Name / Category 就点生成，会提示先填，并把这两个框标红。
+4. 选一个仓库并填初始库存（选填），点 Save product。下方商品列表和顾客端都能看到新商品。
 
 建议演示用的输入（已实测，效果好）：Aurora Ceramic Pour-Over Set / Home / Aurora / 49 /
 "Hand-glazed ceramic dripper with a 600 ml glass server and 40 paper filters." / 卖点 slow coffee ritual, gift ready, dishwasher safe / 风格 lifestyle / 背景 sunlit kitchen counter。

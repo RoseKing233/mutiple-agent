@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 import asyncpg
@@ -26,6 +27,18 @@ class StockAdjustment(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: AdjustmentKind
     quantity: int = Field(ge=0, le=100000)
+    reason: str = Field(min_length=3, max_length=500)
+    request_id: uuid.UUID = Field(default_factory=uuid.uuid4)
+
+
+class StockTransfer(BaseModel):
+    """Move units of one product between warehouses; the destination row is created if missing."""
+
+    model_config = ConfigDict(extra="forbid")
+    product_id: uuid.UUID
+    from_warehouse_id: uuid.UUID
+    to_warehouse_id: uuid.UUID
+    quantity: int = Field(ge=1, le=100000)
     reason: str = Field(min_length=3, max_length=500)
     request_id: uuid.UUID = Field(default_factory=uuid.uuid4)
 
@@ -263,6 +276,69 @@ async def adjust_stock(
     return {"quantity_delta": delta, "quantity": balance, "previous_quantity": current, "replayed": False}
 
 
+async def transfer_stock(conn: asyncpg.Connection, body: StockTransfer, actor_email: str) -> dict:
+    """Must run inside the caller's transaction: both legs commit or neither does.
+
+    Both movements share one timestamp and the inbound leg is written first, so the
+    whole-store total never dips; the forecast treats a zero total as a stockout.
+    """
+    if body.from_warehouse_id == body.to_warehouse_id:
+        raise ValueError("Source and destination warehouses must differ")
+    in_key, out_key = f"transfer:{body.request_id}:in", f"transfer:{body.request_id}:out"
+    done = await conn.fetch(
+        "SELECT event_key, balance_after FROM inventory_movements WHERE event_key = ANY($1::text[])", [in_key, out_key]
+    )
+    if done:
+        balances = {r["event_key"]: r["balance_after"] for r in done}
+        return {
+            "quantity": body.quantity,
+            "from_quantity": balances.get(out_key),
+            "to_quantity": balances.get(in_key),
+            "replayed": True,
+        }
+    await _active_warehouse(conn, body.to_warehouse_id)
+    # Lock both rows in a stable order (warehouse id) so opposite transfers cannot deadlock.
+    await conn.execute(
+        "INSERT INTO warehouse_inventory(product_id, warehouse_id, quantity) VALUES($1,$2,0) ON CONFLICT DO NOTHING",
+        body.product_id,
+        body.to_warehouse_id,
+    )
+    rows = await conn.fetch(
+        """SELECT warehouse_id, quantity FROM warehouse_inventory
+           WHERE product_id=$1 AND warehouse_id = ANY($2::uuid[]) ORDER BY warehouse_id FOR UPDATE""",
+        body.product_id,
+        [body.from_warehouse_id, body.to_warehouse_id],
+    )
+    available = {r["warehouse_id"]: r["quantity"] for r in rows}.get(body.from_warehouse_id)
+    if available is None:
+        raise LookupError("The product has no inventory row in the source warehouse")
+    if available < body.quantity:
+        raise ValueError(f"Insufficient inventory: {available} available, {body.quantity} requested")
+    moment = datetime.now(UTC)
+    notes = _notes(body.reason, actor_email)
+    to_balance = await change_inventory(
+        conn,
+        product_id=body.product_id,
+        warehouse_id=body.to_warehouse_id,
+        quantity_delta=body.quantity,
+        movement_type="transfer_in",
+        event_key=in_key,
+        occurred_at=moment,
+        notes=notes,
+    )
+    from_balance = await change_inventory(
+        conn,
+        product_id=body.product_id,
+        warehouse_id=body.from_warehouse_id,
+        quantity_delta=-body.quantity,
+        movement_type="transfer_out",
+        event_key=out_key,
+        occurred_at=moment,
+        notes=notes,
+    )
+    return {"quantity": body.quantity, "from_quantity": from_balance, "to_quantity": to_balance, "replayed": False}
+
+
 async def delete_inventory_row(conn: asyncpg.Connection, product_id: uuid.UUID, warehouse_id: uuid.UUID) -> dict:
     async with conn.transaction():
         quantity = await conn.fetchval(
@@ -370,7 +446,14 @@ async def create_product(conn: asyncpg.Connection, body: ProductCreate, actor_em
             json.dumps(body.specs),
             body.is_active,
         )
-        for stock in body.stock:
+        stock_rows = list(body.stock)
+        if not stock_rows:
+            # Every product gets an inventory row so it shows up in stock management and can
+            # receive goods later. Default: first active warehouse by name, zero units.
+            default = await conn.fetchval("SELECT id FROM warehouses WHERE is_active ORDER BY name, id LIMIT 1")
+            if default is not None:
+                stock_rows = [ProductStock(warehouse_id=default)]
+        for stock in stock_rows:
             await _active_warehouse(conn, stock.warehouse_id)
             await conn.execute(
                 "INSERT INTO warehouse_inventory(product_id, warehouse_id, quantity, reorder_threshold) "

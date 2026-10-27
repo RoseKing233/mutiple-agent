@@ -93,6 +93,16 @@ async def adjust_inventory(
         raise http_error(exc) from exc
 
 
+@router.post("/inventory/transfers")
+async def transfer_inventory(body: inv.StockTransfer, user: Manager) -> dict:
+    try:
+        async with get_pool().acquire() as conn:
+            async with conn.transaction():
+                return await inv.transfer_stock(conn, body, user["sub"])
+    except (ValueError, LookupError) as exc:
+        raise http_error(exc) from exc
+
+
 @router.delete("/inventory/{product_id}/{warehouse_id}")
 async def delete_inventory(product_id: uuid.UUID, warehouse_id: uuid.UUID, _user: Manager) -> dict:
     try:

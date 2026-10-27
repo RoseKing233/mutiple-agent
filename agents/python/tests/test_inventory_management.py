@@ -180,6 +180,80 @@ async def test_inventory_row_create_threshold_and_delete_rules(inv):
     assert [i["product_name"] for i in low.json()["items"]] == ["Empty Book"]
 
 
+async def test_transfer_moves_stock_creates_destination_row_and_is_idempotent(inv):
+    d = inv
+    body = {
+        "product_id": str(d["stocked"]),
+        "from_warehouse_id": str(d["east"]),
+        "to_warehouse_id": str(d["west"]),  # no row there yet
+        "quantity": 30,  # everything: the store-wide total must still never read zero
+        "reason": "Rebalance to West",
+        "request_id": str(uuid.uuid4()),
+    }
+    first = await d["http"].post("/api/manager/inventory/transfers", json=body, headers=auth(d))
+    assert first.status_code == 200, first.text
+    assert (first.json()["from_quantity"], first.json()["to_quantity"]) == (0, 30)
+    retry = await d["http"].post("/api/manager/inventory/transfers", json=body, headers=auth(d))
+    assert retry.json()["replayed"] is True
+    assert await ledger_matches(d["pool"], d["stocked"], d["east"]) == 0
+    assert await ledger_matches(d["pool"], d["stocked"], d["west"]) == 30
+    async with d["pool"].acquire() as conn:
+        legs = await conn.fetch(
+            """SELECT movement_type, occurred_at FROM inventory_movements
+               WHERE event_key LIKE 'transfer:%' ORDER BY occurred_at, id"""
+        )
+    assert [r["movement_type"] for r in legs] == ["transfer_in", "transfer_out"]
+    assert legs[0]["occurred_at"] == legs[1]["occurred_at"]
+
+
+async def test_transfer_rejects_bad_requests(inv):
+    d = inv
+    base = {"product_id": str(d["stocked"]), "reason": "Rebalance", "quantity": 5}
+    url = "/api/manager/inventory/transfers"
+    same = await d["http"].post(
+        url, json=base | {"from_warehouse_id": str(d["east"]), "to_warehouse_id": str(d["east"])}, headers=auth(d)
+    )
+    assert same.status_code == 422
+    too_many = await d["http"].post(
+        url,
+        json=base | {"quantity": 31, "from_warehouse_id": str(d["east"]), "to_warehouse_id": str(d["west"])},
+        headers=auth(d),
+    )
+    assert too_many.status_code == 422 and "Insufficient" in too_many.json()["detail"]
+    no_source = await d["http"].post(
+        url, json=base | {"from_warehouse_id": str(d["west"]), "to_warehouse_id": str(d["east"])}, headers=auth(d)
+    )
+    assert no_source.status_code == 404
+    async with d["pool"].acquire() as conn:
+        # The failed request rolled back, including the destination row it would have created.
+        assert not await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM warehouse_inventory WHERE product_id=$1 AND warehouse_id=$2)",
+            d["stocked"],
+            d["west"],
+        )
+    assert (await d["http"].post(url, json=base, headers=auth(d, "customer"))).status_code == 403
+
+
+async def test_product_without_stock_gets_zero_row_in_first_warehouse(inv):
+    d = inv
+    created = await d["http"].post(
+        "/api/manager/products",
+        json={"name": "Plain Mug", "description": "White mug", "category": "Home", "price": 9},
+        headers=auth(d),
+    )
+    assert created.status_code == 201, created.text
+    stock = created.json()["stock"]
+    assert [(s["warehouse_name"], s["quantity"]) for s in stock] == [("East", 0)]  # "East" sorts before "West"
+    listed = await d["http"].get("/api/manager/inventory?search=Plain Mug", headers=auth(d))
+    assert [i["warehouse_name"] for i in listed.json()["items"]] == ["East"]
+    receipt = await d["http"].post(
+        f"/api/manager/inventory/{created.json()['id']}/{stock[0]['warehouse_id']}/adjustments",
+        json={"kind": "manual_receipt", "quantity": 12, "reason": "First delivery"},
+        headers=auth(d),
+    )
+    assert receipt.json()["quantity"] == 12
+
+
 # ── Warehouses ──────────────────────────────────────────────────────────────
 
 

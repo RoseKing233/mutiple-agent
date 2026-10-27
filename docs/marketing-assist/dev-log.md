@@ -34,3 +34,12 @@
 ### 真实环境
 - 重新构建 seeder、orchestrator、frontend，用 `scripts.migrate` 在原有数据库上增量执行了 005，数据保留。
 - 用真实 key 测试，结果见 `test-record.md`：文案 4 秒，图片 9.5 秒，生成的图片质量可以直接用作商品图。
+
+### 用户试用后的表单改进（10-27）
+用户实际点页面后反馈："不知道哪些必填、各个框该填什么"。改动只涉及 `web/src/components/manager/inventory.tsx` 的 `NewProductForm` / `MarketingAssist`：
+- **顺序**：基本信息 → AI 营销辅助 → 图片和库存 → 保存。先填好信息，再让 AI 生成。
+- **必填提示**：Name、Category、Price、Description 的标签加 `*`。必填项空着离开输入框，或点保存时还没填，输入框会变红（用 `aria-invalid`，复用 Input 组件自带的红色样式），并提示 "Please fill in the fields marked in red"。生成按钮不再是灰色不可点：没填 Name / Category 就点生成，会把这两个框标红并说明原因。
+- **灰色示例文字**（placeholder，输入时消失）：每个框都给了例子，比如 Audience 写 "e.g. home coffee lovers"，卖点提示"用逗号隔开"，图片的 Background 改名为 "Image scene"，并说明是"图片里要出现什么"。
+- **Category 改成下拉框**：选项来自 Jingtong 已有的 `/api/manager/catalog`，即现有商品的类别，另外加一项 "Other (add a new category)…"，选了之后可以输入新类别。后端本来就接受任意类别名，所以不用改后端。
+- 验证：`tsc` 和 `eslint` 通过，前端容器已重新构建。交互效果还需要用户在浏览器里确认。
+- **选中反馈**（用户第二轮反馈）：点"Use this version"后，这张卡片会加粗主色外框、加阴影和浅色底，右上角显示"In use"标记，按钮变为"Selected (filled into the form)"；重新生成文案后，选中状态会清空。生成的图片也用同样的样式，选中的图片按表单当前的 image_url 判断。`tsc` 和 `eslint` 通过，前端容器已重新构建。

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, RefreshCw, Sparkles } from "lucide-react";
+import { Check, Loader2, RefreshCw, Sparkles } from "lucide-react";
 import { api } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -223,6 +223,7 @@ function StockTab() {
     return api.inventory<{ items: InventoryItem[]; total: number }>(`/inventory?${q}`);
   }, [search, lowOnly]);
   const { data, error, reload } = useLoad(load);
+  const warehouses = useLoad(useCallback(() => api.inventory<{ warehouses: Warehouse[] }>("/warehouses"), []));
   const [open, setOpen] = useState<string | null>(null);
 
   return (
@@ -245,7 +246,8 @@ function StockTab() {
             {data?.items.map((i) => {
               const key = `${i.product_id}/${i.warehouse_id}`;
               return (
-                <StockRow key={key} item={i} open={open === key} onToggle={() => setOpen(open === key ? null : key)} onDone={reload} />
+                <StockRow key={key} item={i} warehouses={warehouses.data?.warehouses ?? []}
+                  open={open === key} onToggle={() => setOpen(open === key ? null : key)} onDone={reload} />
               );
             })}
           </tbody>
@@ -256,11 +258,17 @@ function StockTab() {
   );
 }
 
-function StockRow({ item, open, onToggle, onDone }: { item: InventoryItem; open: boolean; onToggle: () => void; onDone: () => void }) {
+function StockRow({ item, warehouses, open, onToggle, onDone }: {
+  item: InventoryItem; warehouses: Warehouse[]; open: boolean; onToggle: () => void; onDone: () => void;
+}) {
   const path = `/inventory/${item.product_id}/${item.warehouse_id}`;
   const [kind, setKind] = useState("manual_receipt");
   const [quantity, setQuantity] = useState(1);
   const [reason, setReason] = useState("");
+  const targets = warehouses.filter((w) => w.is_active && w.id !== item.warehouse_id);
+  const [moveTo, setMoveTo] = useState("");
+  const [moveQty, setMoveQty] = useState(1);
+  const [moveReason, setMoveReason] = useState("");
   const [threshold, setThreshold] = useState(item.reorder_threshold);
   const [error, setError] = useState<string | null>(null);
   const [movements, setMovements] = useState<Movement[] | null>(null);
@@ -311,6 +319,28 @@ function StockRow({ item, open, onToggle, onDone }: { item: InventoryItem; open:
               <Button variant="outline" onClick={() => run(() => api.inventory(path, "PATCH", { reorder_threshold: threshold }))}>Save threshold</Button>
               <Button variant="destructive" disabled={item.quantity !== 0} title="Only empty rows can be deleted"
                 onClick={() => run(() => api.inventory(path, "DELETE"))}>Delete row</Button>
+            </div>
+            <div className="mt-3 flex flex-wrap items-end gap-2 border-t pt-3">
+              <Field label="Transfer to warehouse">
+                <select className={selectClass} value={moveTo} onChange={(e) => setMoveTo(e.target.value)}>
+                  <option value="">Choose a warehouse…</option>
+                  {targets.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+                </select>
+              </Field>
+              <Field label={`Units to move (max ${item.quantity})`}>
+                <Input type="number" min={1} max={item.quantity} className="w-24" value={moveQty} onChange={(e) => setMoveQty(Number(e.target.value))} />
+              </Field>
+              <Field label="Reason (required)">
+                <Input className="w-56" placeholder="e.g. rebalance to West Coast" value={moveReason} onChange={(e) => setMoveReason(e.target.value)} />
+              </Field>
+              <Button variant="outline" disabled={!moveTo || moveQty < 1 || moveQty > item.quantity || moveReason.trim().length < 3}
+                onClick={() => run(() => api.inventory("/inventory/transfers", "POST", {
+                  product_id: item.product_id, from_warehouse_id: item.warehouse_id, to_warehouse_id: moveTo,
+                  quantity: moveQty, reason: moveReason, request_id: newId(),
+                }))}>
+                Transfer
+              </Button>
+              <span className="text-xs text-muted-foreground">The target warehouse row is created automatically if missing.</span>
             </div>
             {error && <p className="mt-2 text-sm text-destructive">{error}</p>}
             <div className="mt-3 text-xs">
@@ -444,54 +474,137 @@ function ProductsPanel() {
   );
 }
 
+type Draft = {
+  name: string; category: string; brand: string; price: string; description: string;
+  image_url: string; warehouse_id: string; initial_quantity: number;
+};
+type Required = "name" | "category" | "price" | "description";
+
+const EMPTY_DRAFT: Draft = { name: "", category: "", brand: "", price: "", description: "", image_url: "", warehouse_id: "", initial_quantity: 0 };
+const OTHER_CATEGORY = "__other__";
+
+function missing(form: Draft, key: Required): boolean {
+  return key === "price" ? !(Number(form.price) > 0) : !form[key].trim();
+}
+
+/** Red outline for a required field that is still empty once the user has touched it or tried to submit. */
+const invalidClass = "border-destructive ring-1 ring-destructive/30";
+
 function NewProductForm({ onCreated }: { onCreated: () => void }) {
   const warehouses = useLoad(useCallback(() => api.inventory<{ warehouses: Warehouse[] }>("/warehouses"), []));
-  const empty = { name: "", description: "", category: "", brand: "", price: "", image_url: "", warehouse_id: "", initial_quantity: 0 };
-  const [form, setForm] = useState(empty);
+  const catalog = useLoad(useCallback(() => api.inventory<{ categories: string[] }>("/catalog"), []));
+  const [form, setForm] = useState<Draft>(EMPTY_DRAFT);
+  const [categoryChoice, setCategoryChoice] = useState("");
+  const [touched, setTouched] = useState<Set<Required>>(new Set());
   const [listNow, setListNow] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const set = (key: keyof typeof empty) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
-    setForm({ ...form, [key]: key === "initial_quantity" ? Number(e.target.value) : e.target.value });
+
+  const apply = (patch: Partial<Draft>) => setForm((current) => ({ ...current, ...patch }));
+  const set = (key: keyof Draft) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
+    apply({ [key]: key === "initial_quantity" ? Number(e.target.value) : e.target.value });
+  const touch = (...keys: Required[]) => setTouched((current) => new Set([...current, ...keys]));
+  const bad = (key: Required) => touched.has(key) && missing(form, key);
+  const required = (key: Required) => ({
+    onBlur: () => touch(key),
+    "aria-invalid": bad(key) || undefined,
+    "aria-required": true,
+  });
+
+  function chooseCategory(value: string) {
+    setCategoryChoice(value);
+    apply({ category: value === OTHER_CATEGORY ? "" : value });
+    if (value !== OTHER_CATEGORY) touch("category");
+  }
 
   async function save() {
+    const keys: Required[] = ["name", "category", "price", "description"];
+    touch(...keys);
+    if (keys.some((k) => missing(form, k))) {
+      setError("Please fill in the fields marked in red.");
+      return;
+    }
     setError(null);
     try {
       await api.inventory("/products", "POST", {
-        name: form.name, description: form.description, category: form.category, brand: form.brand || null,
-        price: Number(form.price), image_url: form.image_url || null, is_active: listNow,
+        name: form.name.trim(), description: form.description.trim(), category: form.category.trim(),
+        brand: form.brand.trim() || null, price: Number(form.price), image_url: form.image_url || null, is_active: listNow,
         stock: form.warehouse_id ? [{ warehouse_id: form.warehouse_id, initial_quantity: form.initial_quantity }] : [],
       });
-      setForm(empty);
+      setForm(EMPTY_DRAFT);
+      setCategoryChoice("");
+      setTouched(new Set());
       onCreated();
     } catch (e) { setError((e as Error).message); }
   }
 
+  const categories = catalog.data?.categories ?? [];
   return (
     <details className="rounded-lg border p-2">
       <summary className="cursor-pointer text-sm font-medium">New product</summary>
-      <MarketingAssist form={form} apply={(patch) => setForm((current) => ({ ...current, ...patch }))} />
+      <p className="mt-2 text-xs text-muted-foreground">Fields marked * are required. Fill in the basics first, then let AI help with the copy and image.</p>
+
       <div className="mt-2 grid gap-2 sm:grid-cols-2">
-        <Input placeholder="Name" value={form.name} onChange={set("name")} />
-        <Input placeholder="Category" value={form.category} onChange={set("category")} />
-        <Input placeholder="Brand" value={form.brand} onChange={set("brand")} />
-        <Input placeholder="Price" type="number" min={0} step="0.01" value={form.price} onChange={set("price")} />
-        <textarea placeholder="Description" className="min-h-20 rounded-lg border border-input bg-background p-2 text-sm sm:col-span-2"
-          value={form.description} onChange={set("description")} />
-        <Input placeholder="Image URL (optional)" className="sm:col-span-2" value={form.image_url} onChange={set("image_url")} />
+        <Field label="Name *">
+          <Input placeholder="e.g. Aurora Ceramic Pour-Over Set" value={form.name} onChange={set("name")}
+            className={bad("name") ? invalidClass : ""} {...required("name")} />
+        </Field>
+        <Field label="Category *">
+          <select className={`${selectClass} ${bad("category") && categoryChoice !== OTHER_CATEGORY ? invalidClass : ""}`}
+            value={categoryChoice} onChange={(e) => chooseCategory(e.target.value)} {...required("category")}>
+            <option value="">Select a category…</option>
+            {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+            <option value={OTHER_CATEGORY}>Other (add a new category)…</option>
+          </select>
+          {categoryChoice === OTHER_CATEGORY && (
+            <Input placeholder="New category name, e.g. Garden" value={form.category} onChange={set("category")}
+              className={bad("category") ? invalidClass : ""} {...required("category")} autoFocus />
+          )}
+        </Field>
+        <Field label="Brand (optional)">
+          <Input placeholder="e.g. Aurora" value={form.brand} onChange={set("brand")} />
+        </Field>
+        <Field label="Price (USD) *">
+          <Input placeholder="e.g. 49.00" type="number" min={0} step="0.01" value={form.price} onChange={set("price")}
+            className={bad("price") ? invalidClass : ""} {...required("price")} />
+        </Field>
+        <div className="sm:col-span-2">
+          <Field label="Description *">
+            <textarea
+              placeholder="e.g. Hand-glazed ceramic dripper with a 600 ml glass server and 40 paper filters. Include real specs: AI copy may only use numbers written here."
+              className={`min-h-20 rounded-lg border border-input bg-background p-2 text-sm text-foreground placeholder:text-muted-foreground ${bad("description") ? invalidClass : ""}`}
+              value={form.description} onChange={set("description")} {...required("description")} />
+          </Field>
+        </div>
+      </div>
+
+      <MarketingAssist form={form} apply={apply} onMissingBasics={() => touch("name", "category")} />
+
+      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+        <div className="sm:col-span-2">
+          <Field label="Image URL (optional, filled in when you use a generated image)">
+            <Input placeholder="e.g. https://… or pick a generated image above" value={form.image_url} onChange={set("image_url")} />
+          </Field>
+        </div>
         {form.image_url && (
           // eslint-disable-next-line @next/next/no-img-element -- product images are plain <img> across the app
           <img src={form.image_url} alt="Selected product image" className="h-32 w-32 rounded-lg border object-cover sm:col-span-2" />
         )}
-        <select className={selectClass} value={form.warehouse_id} onChange={set("warehouse_id")} aria-label="Initial warehouse">
-          <option value="">No initial stock</option>
-          {warehouses.data?.warehouses.filter((w) => w.is_active).map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
-        </select>
-        <Input type="number" min={0} placeholder="Initial quantity" value={form.initial_quantity} onChange={set("initial_quantity")}
-          disabled={!form.warehouse_id} />
-        <label className="flex items-center gap-1 text-sm"><input type="checkbox" checked={listNow} onChange={(e) => setListNow(e.target.checked)} />List immediately</label>
-        <Button disabled={!form.name || !form.description || !form.category || !(Number(form.price) > 0)} onClick={save}>Save product</Button>
+        <Field label="Initial stock warehouse">
+          <select className={selectClass} value={form.warehouse_id} onChange={set("warehouse_id")}>
+            <option value="">Default: first warehouse, 0 units (add stock later)</option>
+            {warehouses.data?.warehouses.filter((w) => w.is_active).map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+          </select>
+        </Field>
+        <Field label="Initial quantity">
+          <Input type="number" min={0} placeholder="e.g. 20" value={form.initial_quantity} onChange={set("initial_quantity")}
+            disabled={!form.warehouse_id} />
+        </Field>
+        <label className="flex items-center gap-1 text-sm">
+          <input type="checkbox" checked={listNow} onChange={(e) => setListNow(e.target.checked)} />List immediately (uncheck to save as delisted)
+        </label>
+        <Button onClick={save}>Save product</Button>
       </div>
-      {error && <p className="mt-2 text-sm text-destructive">{error}</p>}
+      {error && <p role="alert" className="mt-2 text-sm text-destructive">{error}</p>}
     </details>
   );
 }
@@ -500,21 +613,34 @@ function NewProductForm({ onCreated }: { onCreated: () => void }) {
 
 interface CopyVariant { angle: string; title: string; description: string; highlights: string[] }
 interface GeneratedImage { id: string; url: string }
-type ListingDraft = { name: string; category: string; brand: string; price: string; description: string; image_url: string };
 
-function MarketingAssist({ form, apply }: { form: ListingDraft; apply: (patch: Partial<ListingDraft>) => void }) {
+const IMAGE_STYLES = [
+  ["studio", "studio (clean backdrop)"],
+  ["lifestyle", "lifestyle (in use)"],
+  ["minimal", "minimal"],
+  ["festive", "festive"],
+] as const;
+
+function MarketingAssist({ form, apply, onMissingBasics }: {
+  form: Draft; apply: (patch: Partial<Draft>) => void; onMissingBasics: () => void;
+}) {
   const [keywords, setKeywords] = useState("");
   const [audience, setAudience] = useState("");
   const [tone, setTone] = useState("friendly");
   const [style, setStyle] = useState("studio");
   const [background, setBackground] = useState("");
   const [variants, setVariants] = useState<CopyVariant[]>([]);
+  const [chosenVariant, setChosenVariant] = useState<number | null>(null);
   const [images, setImages] = useState<GeneratedImage[]>([]);
   const [busy, setBusy] = useState<"copy" | "images" | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const ready = Boolean(form.name && form.category);
 
   async function generate(kind: "copy" | "images") {
+    if (!form.name.trim() || !form.category.trim()) {
+      onMissingBasics();
+      setError("Fill in Name and Category above first; AI uses them to generate.");
+      return;
+    }
     setBusy(kind);
     setError(null);
     try {
@@ -525,6 +651,7 @@ function MarketingAssist({ form, apply }: { form: ListingDraft; apply: (patch: P
           keywords: keywords.split(",").map((k) => k.trim()).filter(Boolean).slice(0, 10), audience, tone,
         });
         setVariants(r.variants);
+        setChosenVariant(null);
       } else {
         const r = await api.inventory<{ images: GeneratedImage[] }>("/marketing/images", "POST", {
           name: form.name, category: form.category, description: form.description, style, background,
@@ -540,28 +667,36 @@ function MarketingAssist({ form, apply }: { form: ListingDraft; apply: (patch: P
   }
 
   return (
-    <div className="mt-2 rounded-lg border border-dashed p-2">
-      <p className="text-xs font-medium">AI marketing assist <span className="font-normal text-muted-foreground">— fill name and category first; you choose what to use</span></p>
+    <div className="mt-3 rounded-lg border border-dashed p-2">
+      <p className="text-xs font-medium">
+        AI marketing assist <span className="font-normal text-muted-foreground">(optional): AI suggests, you choose; nothing is saved until &quot;Save product&quot;</span>
+      </p>
       <div className="mt-2 flex flex-wrap items-end gap-2">
-        <Field label="Selling points (comma separated)"><Input className="w-56" value={keywords} onChange={(e) => setKeywords(e.target.value)} /></Field>
-        <Field label="Audience"><Input className="w-36" value={audience} onChange={(e) => setAudience(e.target.value)} /></Field>
+        <Field label="Selling points (optional)">
+          <Input className="w-72" placeholder="e.g. gift ready, dishwasher safe (separate with commas)" value={keywords} onChange={(e) => setKeywords(e.target.value)} />
+        </Field>
+        <Field label="Audience (optional)">
+          <Input className="w-44" placeholder="e.g. home coffee lovers" value={audience} onChange={(e) => setAudience(e.target.value)} />
+        </Field>
         <Field label="Tone">
           <select className={selectClass} value={tone} onChange={(e) => setTone(e.target.value)}>
             {["friendly", "professional", "premium", "playful"].map((t) => <option key={t}>{t}</option>)}
           </select>
         </Field>
-        <Button size="sm" disabled={!ready || busy !== null} onClick={() => generate("copy")}>
+        <Button size="sm" disabled={busy !== null} onClick={() => generate("copy")}>
           {busy === "copy" ? <Loader2 className="animate-spin" /> : <Sparkles />}Generate title & copy
         </Button>
       </div>
       <div className="mt-2 flex flex-wrap items-end gap-2">
         <Field label="Image style">
           <select className={selectClass} value={style} onChange={(e) => setStyle(e.target.value)}>
-            {["studio", "lifestyle", "minimal", "festive"].map((s) => <option key={s}>{s}</option>)}
+            {IMAGE_STYLES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
         </Field>
-        <Field label="Background (optional)"><Input className="w-48" value={background} onChange={(e) => setBackground(e.target.value)} /></Field>
-        <Button size="sm" disabled={!ready || busy !== null} onClick={() => generate("images")}>
+        <Field label="Image scene (optional)">
+          <Input className="w-80" placeholder="Describe what the picture shows, e.g. on a sunlit kitchen counter" value={background} onChange={(e) => setBackground(e.target.value)} />
+        </Field>
+        <Button size="sm" disabled={busy !== null} onClick={() => generate("images")}>
           {busy === "images" ? <Loader2 className="animate-spin" /> : <Sparkles />}Generate images
         </Button>
         {busy === "images" && <span className="text-xs text-muted-foreground">About 10–20 seconds…</span>}
@@ -569,31 +704,49 @@ function MarketingAssist({ form, apply }: { form: ListingDraft; apply: (patch: P
       {error && <p role="alert" className="mt-2 text-sm text-destructive">{error}</p>}
       {variants.length > 0 && (
         <div className="mt-2 grid gap-2 md:grid-cols-3">
-          {variants.map((v, i) => (
-            <div key={i} className="flex flex-col gap-1 rounded-lg border p-2 text-sm">
-              {v.angle && <Badge variant="outline">{v.angle}</Badge>}
-              <p className="font-medium">{v.title}</p>
-              <p className="text-muted-foreground">{v.description}</p>
-              <ul className="list-disc pl-4 text-xs text-muted-foreground">{v.highlights.map((h) => <li key={h}>{h}</li>)}</ul>
-              <Button size="sm" variant="outline" className="mt-auto"
-                onClick={() => apply({ name: v.title, description: [v.description, ...v.highlights.map((h) => `• ${h}`)].join("\n") })}>
-                Use this version
-              </Button>
-            </div>
-          ))}
+          {variants.map((v, i) => {
+            const chosen = chosenVariant === i;
+            return (
+              <div key={i} aria-selected={chosen}
+                className={`flex flex-col gap-1 rounded-lg p-2 text-sm transition-all ${chosen
+                  ? "border-2 border-primary bg-primary/5 shadow-lg ring-2 ring-primary/20"
+                  : "border hover:shadow-sm"}`}>
+                <div className="flex items-center gap-1">
+                  {v.angle && <Badge variant="outline">{v.angle}</Badge>}
+                  {chosen && <Badge className="ml-auto"><Check />In use</Badge>}
+                </div>
+                <p className="font-medium">{v.title}</p>
+                <p className="text-muted-foreground">{v.description}</p>
+                <ul className="list-disc pl-4 text-xs text-muted-foreground">{v.highlights.map((h) => <li key={h}>{h}</li>)}</ul>
+                <Button size="sm" variant={chosen ? "default" : "outline"} className="mt-auto"
+                  onClick={() => {
+                    apply({ name: v.title, description: [v.description, ...v.highlights.map((h) => `• ${h}`)].join("\n") });
+                    setChosenVariant(i);
+                  }}>
+                  {chosen ? <><Check />Selected (filled into the form)</> : "Use this version"}
+                </Button>
+              </div>
+            );
+          })}
         </div>
       )}
       {images.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-2">
-          {images.map((img) => (
-            <div key={img.id} className="flex flex-col items-center gap-1">
-              {/* eslint-disable-next-line @next/next/no-img-element -- generated images are served by the API proxy */}
-              <img src={img.url} alt="AI generated product candidate" className="h-32 w-32 rounded-lg border object-cover" />
-              <Button size="sm" variant={form.image_url === img.url ? "default" : "outline"} onClick={() => apply({ image_url: img.url })}>
-                {form.image_url === img.url ? "Selected" : "Use this image"}
-              </Button>
-            </div>
-          ))}
+          {images.map((img) => {
+            const chosen = form.image_url === img.url;
+            return (
+              <div key={img.id} aria-selected={chosen}
+                className={`flex flex-col items-center gap-1 rounded-lg p-1 transition-all ${chosen
+                  ? "border-2 border-primary bg-primary/5 shadow-lg ring-2 ring-primary/20"
+                  : "border border-transparent"}`}>
+                {/* eslint-disable-next-line @next/next/no-img-element -- generated images are served by the API proxy */}
+                <img src={img.url} alt="AI generated product candidate" className="h-32 w-32 rounded-lg border object-cover" />
+                <Button size="sm" variant={chosen ? "default" : "outline"} onClick={() => apply({ image_url: img.url })}>
+                  {chosen ? <><Check />Selected</> : "Use this image"}
+                </Button>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
