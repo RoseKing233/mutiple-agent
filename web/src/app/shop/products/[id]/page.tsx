@@ -8,7 +8,7 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { formatPrice } from "@/lib/format";
 import { productImageUrl } from "@/lib/images";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RecommendationPanel } from "@/components/products/recommendation-panel";
 
@@ -146,17 +146,12 @@ export default function ProductDetailPage() {
                     "Sign in to buy"
                   )}
                 </Button>
-                <Button
-                  render={
-                    <Link
-                      href={`/shop/assistant?prompt=${encodeURIComponent(`Tell me more about ${product.name}`)}`}
-                    />
-                  }
-                  variant="outline"
-                  size="lg"
+                <Link
+                  href={`/shop/assistant?prompt=${encodeURIComponent(`Tell me more about ${product.name}`)}`}
+                  className={buttonVariants({ variant: "outline", size: "lg" })}
                 >
                   <Sparkles className="size-4 text-primary" /> Ask the assistant
-                </Button>
+                </Link>
               </div>
             </>
           ) : (

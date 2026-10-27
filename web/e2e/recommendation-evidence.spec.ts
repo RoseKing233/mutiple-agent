@@ -15,6 +15,13 @@ test.describe("recommendation evidence", () => {
       expect(product).toBeDefined();
 
       const paidRequests: string[] = [];
+      const browserErrors: string[] = [];
+      page.on("pageerror", (error) => browserErrors.push(error.message));
+      page.on("console", (message) => {
+        if (message.type() === "error" && message.text().includes("Base UI:")) {
+          browserErrors.push(message.text());
+        }
+      });
       page.on("request", (req) => {
         if (req.url().includes("/recommendation-reasons")) paidRequests.push(req.url());
       });
@@ -26,6 +33,11 @@ test.describe("recommendation evidence", () => {
       await expect(panel.getByText("Synthetic demo review", { exact: false }).first()).toBeVisible();
       await expect(panel.getByText("Review evidence:", { exact: false })).toBeVisible();
       await expect(panel.getByRole("alert")).toHaveCount(0);
+      await expect(page.getByRole("link", { name: "Products", exact: true })).toHaveAttribute("href", "/shop/products");
+      await expect(page.getByRole("link", { name: "Sign in", exact: true })).toHaveAttribute("href", "/login");
+      await expect(page.getByRole("link", { name: "Ask the assistant", exact: true })).toHaveAttribute("href", /^\/shop\/assistant\?prompt=/);
+      await expect(page.getByRole("button", { name: "Sign in to buy", exact: true })).toHaveJSProperty("tagName", "BUTTON");
+      expect(browserErrors).toEqual([]);
       expect(paidRequests).toHaveLength(0);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
       await panel.screenshot({

@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { Store, Search, Sparkles } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { CartProvider } from "@/lib/cart-context";
-import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 
@@ -57,9 +57,9 @@ export default function ShopLayout({ children }: { children: React.ReactNode }) 
           </form>
 
           <nav className="flex items-center gap-1.5">
-            <Button render={<Link href="/shop/products" />} variant="ghost" size="sm">
+            <Link href="/shop/products" className={buttonVariants({ variant: "ghost", size: "sm" })}>
               Products
-            </Button>
+            </Link>
             <ThemeToggle />
             {user ? (
               <Link href="/home" aria-label="Your account" className="rounded-full focus-visible:ring-2 focus-visible:ring-ring">
@@ -68,9 +68,9 @@ export default function ShopLayout({ children }: { children: React.ReactNode }) 
                 </Avatar>
               </Link>
             ) : (
-              <Button render={<Link href="/login" />} size="sm">
+              <Link href="/login" className={buttonVariants({ size: "sm" })}>
                 Sign in
-              </Button>
+              </Link>
             )}
           </nav>
         </div>
