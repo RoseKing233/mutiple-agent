@@ -60,6 +60,7 @@ from shared.db import get_pool
 from shared.grounding.ledger import reset_grounding_ledger
 from shared.rate_limit import rate_limit_chat
 from shared.session import get_history_as_dicts, get_history_provider
+from shared.sse import text_event
 from shared.usage_db import UsageTimer, log_agent_usage, log_execution_step
 
 from .legacy import optional_auth
@@ -656,7 +657,7 @@ async def chat_stream(
                             else:
                                 full_bytes += chunk_bytes
                                 full_response.append(chunk)
-                                yield f"data: {chunk}\n\n"
+                                yield text_event(chunk)
 
                     elif item[0] == "delta":
                         # Specialist token — forward immediately to the browser as
@@ -674,7 +675,7 @@ async def chat_stream(
                         # arriving (see web/src/lib/api.ts's onDeltaChunk).
                         _agent_src: str = item[1]
                         delta_chunk: str = item[2]
-                        yield f"event: delta\ndata: {delta_chunk}\n\n"
+                        yield text_event(delta_chunk, event="delta")
 
                     elif item[0] == "frame":
                         # Structured event from a non-"tool" mode (node/handoff/

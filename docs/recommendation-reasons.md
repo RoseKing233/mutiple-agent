@@ -53,6 +53,10 @@ pnpm dev --hostname 127.0.0.1
 
 这一商品页面的功能只需要数据库、Redis、orchestrator 和 web。若要通过整个聊天机器人演示，还需要按原项目启动步骤运行 Product Discovery 等 specialist 服务并配置 `AGENT_REGISTRY`。已注册工具不等于已经完成真实模型的聊天联调。
 
+聊天入口也属于搜索与推荐的验收范围。访问 `/shop/assistant`，输入 `I want to buy a earphone, my buget is 300`：当前演示库应能返回 $299.99 的 Sony WH-1000XM5，并说明这是相关的头戴式耳机，而非保证存在入耳式产品。原词查无结果时，系统会以相关的 `headphones` 用词补查，保留预算、分类、评分及在售条件；有精确匹配时不补查，明确要求 in-ear/earbuds 时也不会启用这一补查。该补查只覆盖这些英语耳机用词，不是通用的跨语言语义检索。
+
+聊天页面已修复开发模式下重复追加文字和执行步骤的问题，并在 specialist → orchestrator → 浏览器之间保留流式文本的换行，使商品卡片和 Markdown 可以正常解析。旧页面里已经生成的重复文字不会自动清理，验收时打开新聊天或重新发送问题。没有匹配商品时仍应如实返回无结果，例如目前演示库没有女士连衣裙。
+
 终端显示地址已占用时，通常是已有服务正在运行；直接打开页面即可，不要再重复启动。关闭前后端窗口中的服务使用 Ctrl+C。停止本次数据库可运行 `docker compose -p zicong-recommendation stop db redis`，数据仍保留。
 
 ## 配置自己的 OpenAI API

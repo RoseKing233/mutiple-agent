@@ -23,6 +23,8 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from shared.sse import text_event
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -355,7 +357,7 @@ def create_agent_app(
                         # would hold each step back by one chunk for no reason.
                         for frame in _drain_new_steps():
                             yield frame
-                        yield f"data: {chunk}\n\n"
+                        yield text_event(chunk)
                 except Exception:
                     logger.exception("%s.message_stream_error", agent_name)
                     yield "data: [ERROR: agent processing failed]\n\n"

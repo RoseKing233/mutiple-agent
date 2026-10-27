@@ -225,6 +225,63 @@ async def test_inactive_products_are_excluded(_pool: Any) -> None:
 # ─────────────────────── semantic_search (hybrid RRF) ───────────────────────
 
 
+@pytest.fixture(params=["native", "mcp"])
+def search_tool(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, _pool: Any) -> Any:
+    if request.param == "mcp":
+        import ecommerce_mcp_product.server as mcp_server
+
+        monkeypatch.setattr(mcp_server, "_pool", _pool)
+        return mcp_server.search_products
+    return pd_tools.search_products
+
+
+@pytest.mark.parametrize("query", ["earphone", "EARPHONES", "ear phones"])
+async def test_related_headphones_preserve_filters(_pool: Any, search_tool: Any, query: str) -> None:
+    await _seed_catalog(_pool)
+    results = await search_tool(query=query, category="Electronics", min_price=50, max_price=300, min_rating=4)
+    assert [r["id"] for r in results] == [str(ANC)]
+    if query == "ear phones":
+        assert "match_note" not in results[0]  # already matches "over-ear" without a retry
+    else:
+        assert "not an exact earphone match" in results[0]["match_note"]
+    assert await search_tool(query=query, category="Home", max_price=300) == []
+    assert await search_tool(query=query, min_price=50, max_price=100) == []
+
+
+async def test_related_headphones_respect_budget_boundary_and_inactive(_pool: Any, search_tool: Any) -> None:
+    await _seed_catalog(_pool)
+    await _pool.execute("UPDATE products SET price = 300 WHERE id = $1", ANC)
+    assert [r["id"] for r in await search_tool(query="earphone", min_price=50, max_price=300)] == [str(ANC)]
+    assert await search_tool(query="earphone", min_price=50, max_price=299.99) == []
+    await _pool.execute("UPDATE products SET is_active = FALSE WHERE id = $1", ANC)
+    assert await search_tool(query="earphone", min_price=50, max_price=300) == []
+
+
+async def test_exact_earphone_results_are_not_broadened(_pool: Any, search_tool: Any) -> None:
+    await _seed_catalog(_pool)
+    await _pool.execute("UPDATE products SET name = 'Wired Earphones' WHERE id = $1", KETTLE)
+    results = await search_tool(query="earphone", max_price=300)
+    assert [r["id"] for r in results] == [str(KETTLE)]
+    assert "match_note" not in results[0]
+
+
+async def test_missing_product_is_not_replaced_by_unrelated_items(_pool: Any, search_tool: Any) -> None:
+    await _seed_catalog(_pool)
+    assert await search_tool(query="women dress", max_price=350) == []
+    assert await search_tool(query="earbuds", max_price=300) == []
+
+
+async def test_related_query_keeps_explicit_in_ear_constraints() -> None:
+    from ecommerce_mcp_product.server import _related_headphone_query
+
+    from shared.search import related_headphone_query
+
+    for make_query in (related_headphone_query, _related_headphone_query):
+        assert make_query("wireless earphones") == "wireless headphones"
+        for query in ("in-ear earphones", "in ear earphones", "earbuds or earphones", "earphonecase"):
+            assert make_query(query) is None
+
+
 @pytest.fixture
 def _stub_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
     """Return a fixed query vector so the vector arm's ranking is deterministic.

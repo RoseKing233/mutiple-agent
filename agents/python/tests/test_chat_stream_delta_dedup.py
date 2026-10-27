@@ -20,6 +20,7 @@ just the in-memory SSE frames.
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncIterator
 
 import pytest
 from fastapi import FastAPI
@@ -93,6 +94,16 @@ async def test_specialist_delta_preview_is_not_persisted_into_the_final_message(
     # real-time UX, not removed, only no longer double-persisted.
     assert "event: delta" in body
     assert specialist_text.splitlines()[0] in body  # the delta frame's own text reached the wire
+
+    from shared.sse import iter_events
+
+    async def wire_lines() -> AsyncIterator[str]:
+        for line in body.split("\n"):
+            yield line
+
+    frames = [frame async for frame in iter_events(wire_lines())]
+    assert ("delta", specialist_text) in frames
+    assert ("data", orchestrator_text) in frames
 
     row = await clean_db.fetchrow(
         "SELECT content FROM messages WHERE role = 'assistant' ORDER BY created_at DESC LIMIT 1"

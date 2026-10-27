@@ -10,7 +10,7 @@ from pydantic import Field
 
 from shared.agent_factory import create_embedding_client, get_embedding_model
 from shared.db import get_pool
-from shared.search import RRF_K, or_joined_tsquery
+from shared.search import RRF_K, or_joined_tsquery, related_headphone_query
 from shared.tool_inputs import clamp_limit
 
 SORT_CLAUSES = {
@@ -91,6 +91,11 @@ async def search_products(
 
     async with pool.acquire() as conn:
         rows = await conn.fetch(sql, *args)
+        related_query = related_headphone_query(query) if query and not rows else None
+        if related_query:
+            # Retry the same SQL, changing only the text parameter. In
+            # particular, an empty result never relaxes the shopper's budget.
+            rows = await conn.fetch(sql, related_query, *args[1:])
         return [
             {
                 "id": str(r["id"]),
@@ -104,6 +109,14 @@ async def search_products(
                 "rating": float(r["rating"]),
                 "review_count": r["review_count"],
                 "image_url": r["image_url"],
+                **(
+                    {
+                        "match_note": "Related headphones, not an exact earphone match; "
+                        "check the form factor in product details."
+                    }
+                    if related_query
+                    else {}
+                ),
             }
             for r in rows
         ]

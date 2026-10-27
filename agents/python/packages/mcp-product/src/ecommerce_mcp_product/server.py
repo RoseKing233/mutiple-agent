@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 from typing import Annotated
 
@@ -36,6 +37,14 @@ EMBEDDING_DIM = 1536
 MCP_AUTH_ENABLED = os.environ.get("MCP_AUTH_ENABLED", "false").lower() == "true"
 
 _pool: asyncpg.Pool | None = None
+
+
+def _related_headphone_query(query: str) -> str | None:
+    """Vendored from shared.search; preserve explicit in-ear requirements."""
+    if re.search(r"\b(?:in[- ]ear|ear\s*buds?)\b", query, re.IGNORECASE):
+        return None
+    related = re.sub(r"\bear\s*phones?\b", "headphones", query, flags=re.IGNORECASE)
+    return related if related != query else None
 
 
 def _or_joined_tsquery(param: str) -> str:
@@ -179,6 +188,9 @@ async def search_products(
     """
     async with _get_pool().acquire() as conn:
         rows = await conn.fetch(sql, *args)
+        related_query = _related_headphone_query(query) if query and not rows else None
+        if related_query:
+            rows = await conn.fetch(sql, related_query, *args[1:])
         return [
             {
                 "id": str(r["id"]),
@@ -190,6 +202,14 @@ async def search_products(
                 "rating": float(r["rating"]),
                 "review_count": r["review_count"],
                 "description": r["description"],
+                **(
+                    {
+                        "match_note": "Related headphones, not an exact earphone match; "
+                        "check the form factor in product details."
+                    }
+                    if related_query
+                    else {}
+                ),
             }
             for r in rows
         ]
