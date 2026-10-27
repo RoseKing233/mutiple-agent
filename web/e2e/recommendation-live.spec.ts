@@ -129,3 +129,50 @@ test("live colour stock question does not invent a variant quantity", async ({ r
   await writeFile("../.claude/recommendation-checks/live-colour-stock.json", JSON.stringify(result, null, 2));
   console.log("Colour stock answer:", result.needs_assessment, "Usage:", result.usage);
 });
+
+test("live green bottle request answers an unlisted colour with valid citations", async ({ page, request }) => {
+  test.skip(process.env.RUN_LIVE_RECOMMENDATION !== "true", "Set RUN_LIVE_RECOMMENDATION=true for one paid test.");
+  test.skip(process.env.BACKEND_STACK === "dotnet", "Python implementation only.");
+  test.setTimeout(90000);
+  const response = await request.get("/api/products?search=Hydro%20Flask");
+  expect(response.ok()).toBe(true);
+  const { products } = await response.json();
+  const product = products.find((item: { name: string }) => item.name === "Hydro Flask 32oz Wide Mouth");
+  expect(product).toBeDefined();
+  await page.goto(`/shop/products/${product.id}`);
+  const panel = page.getByRole("region", { name: "Product suitability assessment" });
+  await panel.getByLabel("Your needs and intended use").fill("I want a green one");
+  await panel.getByLabel("Maximum budget (USD, optional)").fill("49");
+  const generated = page.waitForResponse((r) => r.url().includes("/recommendation-reasons"), { timeout: 60000 });
+  await panel.getByRole("button", { name: "Assess this product for me" }).click();
+  const generatedResponse = await generated;
+  expect(generatedResponse.status()).toBe(200);
+  const result = await generatedResponse.json();
+  expect(result.budget_fit).toBe(true);
+  expect(result.needs_assessment.status).toBe("cannot_confirm");
+  expect(result.needs_assessment.text).toMatch(/green/i);
+  expect(result.needs_assessment.text).toMatch(/not listed|no green|does not (?:list|include)|doesn't (?:list|include)/i);
+  expect(result.needs_assessment.text).not.toMatch(/out of stock/i);
+  expect(result.needs_assessment.source_ids).toContain(`demo-options:${product.id}`);
+  const known = new Map<string, string>(result.sources.map((source: { id: string; kind: string }) => [source.id, source.kind]));
+  const points = [result.needs_assessment, ...result.product_summary, ...result.review_summary, ...result.reasons, ...result.cautions];
+  for (const point of points) {
+    expect(point.source_ids.length).toBeGreaterThan(0);
+    for (const id of point.source_ids) expect(known.has(id)).toBe(true);
+  }
+  for (const point of result.product_summary) {
+    for (const id of point.source_ids) expect(["catalogue", "document"]).toContain(known.get(id));
+  }
+  for (const point of result.review_summary) {
+    for (const id of point.source_ids) expect(known.get(id)).toBe("review");
+  }
+  const answer = panel.getByRole("region", { name: "Answer to your request" });
+  await expect(answer).toContainText(result.needs_assessment.text);
+  await expect(panel.getByRole("alert")).toHaveCount(0);
+  await answer.getByRole("link").first().click();
+  await expect(panel.locator("details")).toHaveAttribute("open", "");
+  await mkdir("../.claude/recommendation-checks", { recursive: true });
+  await writeFile("../.claude/recommendation-checks/live-green-bottle.json", JSON.stringify(result, null, 2));
+  await answer.screenshot({ path: "../.claude/recommendation-checks/green-bottle-answer.png", style: "header, nextjs-portal { visibility: hidden; }" });
+  console.log("Green colour answer:", result.needs_assessment, "Usage:", result.usage);
+});

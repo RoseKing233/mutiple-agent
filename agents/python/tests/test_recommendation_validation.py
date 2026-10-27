@@ -10,6 +10,7 @@ from shared.recommendations import (
     RecommendationDraft,
     RecommendationRequest,
     RecommendationUnavailableError,
+    recommendation_response_format,
     validate_recommendation,
 )
 
@@ -95,6 +96,55 @@ def test_uncertainty_answer_can_reference_the_catalogue_checked() -> None:
         ),
         EVIDENCE,
     )
+
+
+def test_generation_schema_enumerates_only_current_evidence_ids() -> None:
+    response_format = recommendation_response_format(EVIDENCE)
+    schema = response_format.model_json_schema()
+    ids_schema = schema["$defs"]["EvidencePoint"]["properties"]["source_ids"]["items"]
+    assert ids_schema["enum"] == ["p:1", "r:1"]
+    result = response_format.model_validate(draft().model_dump())
+    assert isinstance(result, RecommendationDraft)
+    assert result.model_dump() == draft().model_dump()
+
+
+@pytest.mark.parametrize(
+    "section,source", [("reasons", "unknown"), ("review_summary", "p:1"), ("product_summary", "r:1")]
+)
+def test_generation_schema_prevents_unknown_or_wrong_kind_citations(section: str, source: str) -> None:
+    fields = draft(**{section: [{"text": "A claim.", "source_ids": [source]}]}).model_dump()
+    with pytest.raises(ValidationError):
+        recommendation_response_format(EVIDENCE).model_validate(fields)
+
+
+def test_generation_schema_prevents_the_observed_document_id_typo() -> None:
+    valid_id = "document:6773526a-5933-50e8-bb7f-fbbf2628423e"
+    mistyped_id = "document:6773526a-5933-50e8-bbf-fbbf2628423e"
+    evidence = {"sources": [*EVIDENCE["sources"], {"id": valid_id, "kind": "document"}]}
+    fields = draft(product_summary=[{"text": "32oz insulated bottle.", "source_ids": [mistyped_id]}]).model_dump()
+    response_format = recommendation_response_format(evidence)
+    with pytest.raises(ValidationError):
+        response_format.model_validate(fields)
+    fields["product_summary"][0]["source_ids"] = [valid_id]
+    response_format.model_validate(fields)
+
+
+def test_no_review_evidence_requires_an_empty_generated_review_summary() -> None:
+    response_format = recommendation_response_format({"sources": EVIDENCE["sources"][:1]})
+    assert response_format.model_json_schema()["properties"]["review_summary"]["maxItems"] == 0
+    response_format.model_validate(draft().model_dump())
+    with pytest.raises(ValidationError):
+        response_format.model_validate(
+            draft(review_summary=[{"text": "An unsupported opinion.", "source_ids": ["p:1"]}]).model_dump()
+        )
+
+
+def test_generation_schemas_do_not_leak_citations_between_products() -> None:
+    first_format = recommendation_response_format(EVIDENCE)
+    second_format = recommendation_response_format({"sources": [{"id": "p:2", "kind": "catalogue"}]})
+    with pytest.raises(ValidationError):
+        second_format.model_validate(draft().model_dump())
+    first_format.model_validate(draft().model_dump())
 
 
 @pytest.mark.parametrize("mcp", [False, True])

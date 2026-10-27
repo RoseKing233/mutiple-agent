@@ -118,6 +118,8 @@ LLM_MODEL=gpt-4.1
 
 返回值另含必填的 `needs_assessment`（`status`、`text`、`source_ids`），在界面 **Does it meet your needs?** 中优先展示。`status` 为 `meets_needs`、`does_not_meet` 或 `cannot_confirm`。提示词要求直接回答用户的具体需求；例如资料没有颜色时，应先说“无法确认红色款”，不能推断红色缺货，也不能用预算符合代替颜色符合。总库存不是颜色/尺码版本的库存证据。状态属于模型对资料的判断，引用校验只验证来源，不能证明判断语义正确。
 
+每次生成的结构化输出 schema 将 `source_ids` 限定为本次查询所得的来源编号，避免模型抄错 UUID 导致整份回答被拒绝。商品摘要只允许商品/文档来源，评价摘要只允许评价来源；没有评价时强制评价摘要为空。服务端仍会校验返回结果，不替换、猜测或忽略无效引用。该约束不改变接口字段，也不保证每条陈述在语义上正确。
+
 ### 补充演示颜色和尺码
 
 ```powershell
@@ -156,7 +158,7 @@ pnpm build
 # 前后端启动且数据库已填充时，验证电脑和手机页面；不会调用模型。
 pnpm exec playwright test e2e/recommendation-evidence.spec.ts
 
-# 只在手动验收时运行：当前包含三次真实生成请求，会消耗额度。
+# 只在手动验收时运行：当前包含四次真实生成请求，会消耗额度。
 $env:RUN_LIVE_RECOMMENDATION = 'true'
 pnpm exec playwright test e2e/recommendation-live.spec.ts
 Remove-Item Env:RUN_LIVE_RECOMMENDATION

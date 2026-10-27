@@ -11,7 +11,7 @@ from uuid import UUID
 
 import yaml
 from agent_framework import Agent
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 
 from shared.db import get_pool
 from shared.factory import get_chat_client
@@ -56,6 +56,42 @@ class RecommendationDraft(BaseModel):
     review_summary: list[CitedPoint] = Field(max_length=4)
     reasons: list[CitedPoint] = Field(min_length=1, max_length=5)
     cautions: list[CitedPoint] = Field(max_length=5)
+
+
+def recommendation_response_format(evidence: dict[str, Any]) -> type[RecommendationDraft]:
+    """Constrain generated citations to this request's evidence and section kinds.
+
+    Free-form UUID strings can be mistyped even in an otherwise correct answer.
+    Enumerating the allowed IDs prevents this at generation time; the existing
+    provenance validator remains a second check for providers ignoring the schema.
+    """
+    sources = evidence["sources"]
+
+    def cited_type(name: str, base: type[CitedPoint], kinds: set[str]) -> Any:
+        ids = tuple(dict.fromkeys(source["id"] for source in sources if source["kind"] in kinds))
+        if not ids:
+            raise ValueError("Cannot create a citation schema without sources")
+        return create_model(
+            name,
+            __base__=base,
+            source_ids=(list[Literal[ids]], Field(min_length=1, max_length=8)),
+        )
+
+    all_kinds = {"catalogue", "document", "review"}
+    point = cited_type("EvidencePoint", CitedPoint, all_kinds)
+    assessment = cited_type("EvidenceAssessment", NeedsAssessment, all_kinds)
+    product_point = cited_type("ProductEvidencePoint", CitedPoint, {"catalogue", "document"})
+    has_reviews = any(source["kind"] == "review" for source in sources)
+    review_point = cited_type("ReviewEvidencePoint", CitedPoint, {"review"}) if has_reviews else CitedPoint
+    return create_model(
+        "EvidenceRecommendationDraft",
+        __base__=RecommendationDraft,
+        needs_assessment=(assessment, ...),
+        product_summary=(list[product_point], Field(max_length=4)),
+        review_summary=(list[review_point], Field(max_length=4 if has_reviews else 0)),
+        reasons=(list[point], Field(min_length=1, max_length=5)),
+        cautions=(list[point], Field(max_length=5)),
+    )
 
 
 async def get_recommendation_evidence(product_id: str | UUID) -> dict[str, Any]:
@@ -246,6 +282,7 @@ async def generate_recommendation(
     tokens_in = tokens_out = 0
     status = "error"
     try:
+        response_format = recommendation_response_format(evidence)
         async with Agent(
             client=get_chat_client(),
             name="recommendation-reasons",
@@ -264,7 +301,7 @@ async def generate_recommendation(
                         ensure_ascii=False,
                         default=str,
                     ),
-                    options={"response_format": RecommendationDraft, "max_tokens": 1600},
+                    options={"response_format": response_format, "max_tokens": 1600},
                 ),
                 timeout=45,
             )
@@ -272,8 +309,10 @@ async def generate_recommendation(
         tokens_in = int(usage.get("input_token_count", 0) or 0)
         tokens_out = int(usage.get("output_token_count", 0) or 0)
         draft = response.value
-        if not isinstance(draft, RecommendationDraft):
-            draft = RecommendationDraft.model_validate_json(response.text)
+        if isinstance(draft, BaseModel):
+            draft = response_format.model_validate(draft.model_dump())
+        else:
+            draft = response_format.model_validate_json(response.text)
         validate_recommendation(draft, evidence)
         status = "success"
         return {
