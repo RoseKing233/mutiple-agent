@@ -77,12 +77,14 @@ packages = ["shared", "orchestrator", "product_discovery", "order_management", "
 [tool.ruff]
 target-version = "py312"
 line-length = 120
+src = [".", "../.."]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+pythonpath = [".", "../.."]
 testpaths = ["tests"]
 addopts = [
     "--strict-markers",

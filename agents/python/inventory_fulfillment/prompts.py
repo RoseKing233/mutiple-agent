@@ -3,7 +3,7 @@
 from shared.prompt_loader import load_prompt
 
 
-def get_system_prompt(user_role: str = "customer") -> str:
+def get_system_prompt(user_role: str | None = "customer") -> str:
     return load_prompt("inventory-fulfillment", user_role)
 
 

@@ -82,10 +82,13 @@ def database_url(postgres_container: PostgresContainer) -> str:
 @pytest_asyncio.fixture(scope="session")
 async def _schema_applied(database_url: str) -> None:
     """Apply the production schema from docker/postgres/init.sql once per session."""
-    sql = INIT_SQL.read_text()
+    sql = INIT_SQL.read_text(encoding="utf-8")
     conn = await asyncpg.connect(database_url)
     try:
         await conn.execute(sql)
+        from shared.db_migrations import apply_migrations
+
+        await apply_migrations(conn)
     finally:
         await conn.close()
 

@@ -42,6 +42,8 @@
 param(
     [switch]$Clean,
     [switch]$SeedOnly,
+    # Explicit demo rebuild. Ordinary startup preserves existing business data.
+    [switch]$ResetData,
     [switch]$InfraOnly,
     [switch]$Dotnet,
     [switch]$Demo,
@@ -56,6 +58,9 @@ param(
 # Stop on the first unhandled error. Native commands don't trip this on their
 # own, so exit codes are checked explicitly via Invoke-Compose below.
 $ErrorActionPreference = 'Stop'
+if ($Demo -and $ResetData) {
+    throw '-ResetData requires the source-build stack; do not combine it with -Demo.'
+}
 
 function Write-Step    { param([string]$Message) Write-Host "`n── $Message ──`n" -ForegroundColor Cyan }
 function Write-Info    { param([string]$Message) Write-Host "[INFO]  $Message" -ForegroundColor Blue }
@@ -147,6 +152,10 @@ function Invoke-Compose {
         [switch]$AllowFailure,
         [switch]$Quiet
     )
+    # Windows PowerShell 5.1 turns redirected native stderr into ErrorRecords.
+    # Compose writes ordinary progress there, so Stop can abort a successful
+    # command before its exit code is checked. Keep this preference local.
+    $ErrorActionPreference = 'Continue'
     $all = $ComposeArgs + $Arguments
     if ($Quiet) {
         & docker @all *> $null
@@ -167,6 +176,7 @@ function Wait-ForHealth {
         [Parameter(Mandatory)][string[]]$Probe,
         [int]$TimeoutSeconds = 60
     )
+    $ErrorActionPreference = 'Continue'
     Write-Info "Waiting for $Name..."
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while ((Get-Date) -lt $deadline) {
@@ -202,29 +212,28 @@ function Wait-ForHttp {
     throw "$Name did not respond at $Url within ${TimeoutSeconds}s"
 }
 
-function Repair-StaleDatabaseVolume {
+function Assert-DatabaseCredentials {
     <#
         A pgdata volume left over from an older run keeps its original password,
         so the container starts healthy but every connection is rejected. dev.sh
-        carries the same recovery; without it the seeder fails with an
-        authentication error that looks like a config problem.
+        uses the same check. Authentication errors preserve the volume and stop
+        startup, rather than automatically deleting existing business data.
     #>
-    $probe = @('exec', '-T', 'db', 'sh', '-c',
-               'PGPASSWORD=ecommerce_secret psql -h 127.0.0.1 -U ecommerce -d ecommerce_agents -c "SELECT 1"')
+    $ErrorActionPreference = 'Continue'
+    $probe = @('exec', '-T', '-e', 'PGPASSWORD=ecommerce_secret', 'db',
+               'psql', '-h', '127.0.0.1', '-U', 'ecommerce', '-d', 'ecommerce_agents', '-c', 'SELECT 1')
     & docker @($ComposeArgs + $probe) *> $null
     if ($LASTEXITCODE -eq 0) { return }
 
-    Write-Warn 'Database auth failed — stale Docker volume detected. Reinitializing...'
-    Invoke-Compose -Arguments @('stop', 'db') -AllowFailure -Quiet
-    Invoke-Compose -Arguments @('rm', '-f', 'db') -AllowFailure -Quiet
+    throw 'Database credentials do not match. Existing data was preserved. Check credentials; use -Clean only for an intentional volume reset.'
+}
 
-    $volumes = (& docker volume ls -q) | Where-Object { $_ -match $PgDataVolumeRegex }
-    foreach ($volume in $volumes) { & docker volume rm $volume *> $null }
-
-    Invoke-Compose -Arguments @('up', '-d', 'db')
-    Wait-ForHealth -Name 'PostgreSQL' -TimeoutSeconds 60 -Probe @(
-        'exec', 'db', 'pg_isready', '-h', '127.0.0.1', '-U', 'ecommerce', '-d', 'ecommerce_agents')
-    Write-Ok 'Database reinitialized with correct credentials'
+function Invoke-DatabasePreparation {
+    $seedArguments = @('--profile', 'seed', 'run', '--rm', 'seeder')
+    if ($ResetData) {
+        $seedArguments += @('uv', 'run', '--no-project', 'python', '-m', 'scripts.seed', '--reset')
+    }
+    Invoke-Compose -Arguments $seedArguments
 }
 
 function Assert-DatabaseSchema {
@@ -245,11 +254,17 @@ function Assert-DatabaseSchema {
         on purpose — deriving the check from init.sql would be clever and would
         drift.
     #>
-    $query = "SELECT 1 FROM information_schema.columns WHERE table_name = 'products' AND column_name = 'search_vector'"
-    $probe = @('exec', '-T', 'db', 'sh', '-c',
-               "PGPASSWORD=ecommerce_secret psql -h 127.0.0.1 -U ecommerce -d ecommerce_agents -tAc `"$query`"")
-    $result = & docker @($ComposeArgs + $probe) 2>$null
-    if ($result -match '1') { return }
+    $ErrorActionPreference = 'Continue'
+    $query = "SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'products' AND column_name = 'search_vector';"
+    $probe = @('exec', '-T', '-e', 'PGPASSWORD=ecommerce_secret', 'db',
+               'psql', '-h', '127.0.0.1', '-U', 'ecommerce', '-d', 'ecommerce_agents',
+               '-At', '-v', 'ON_ERROR_STOP=1')
+    # SQL through stdin avoids a second shell and nested quote parsing in 5.1.
+    $result = $query | & docker @($ComposeArgs + $probe) 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Database schema check failed: $($result -join ' ')"
+    }
+    if (@($result | Where-Object { $_.ToString().Trim() -eq '1' }).Count -gt 0) { return }
 
     Write-Host ''
     Write-Warn 'Database schema is out of date — products.search_vector is missing.'
@@ -263,8 +278,8 @@ function Assert-DatabaseSchema {
     Write-Host '    Recreate the volume (loses local data, reseeds from scratch):'
     Write-Host '      ./scripts/dev.ps1 -Clean'
     Write-Host ''
-    Write-Host '    Or apply the schema in place, keeping your data:'
-    Write-Host '      docker compose exec -T db psql -U ecommerce -d ecommerce_agents < docker/postgres/init.sql'
+    Write-Host '    Or add the missing generated search column and GIN index in place.'
+    Write-Host '    See docs/sales-analysis/README.md for the data-preserving SQL.'
     Write-Host ''
     exit 1
 }
@@ -365,13 +380,15 @@ try {
     if ($SeedOnly) {
         Write-Step 'Running seeder'
         Assert-SingleStack
+        # The mounted seed script imports shared code from the image; refresh both together.
+        Invoke-Compose -Arguments @('--profile', 'seed', 'build', 'seeder')
         Invoke-Compose -Arguments @('up', '-d', 'db', 'redis', 'aspire')
         Wait-ForHealth -Name 'PostgreSQL' -TimeoutSeconds 60 -Probe @(
             'exec', 'db', 'pg_isready', '-h', '127.0.0.1', '-U', 'ecommerce', '-d', 'ecommerce_agents')
         Wait-ForHealth -Name 'Redis' -Probe @('exec', 'redis', 'redis-cli', 'ping')
-        Repair-StaleDatabaseVolume
+        Assert-DatabaseCredentials
         Assert-DatabaseSchema
-        Invoke-Compose -Arguments @('--profile', 'seed', 'run', '--rm', 'seeder')
+        Invoke-DatabasePreparation
         Write-Ok 'Seeder complete'
         exit 0
     }
@@ -396,13 +413,13 @@ try {
     Wait-ForHealth -Name 'PostgreSQL' -TimeoutSeconds 60 -Probe @(
         'exec', 'db', 'pg_isready', '-h', '127.0.0.1', '-U', 'ecommerce', '-d', 'ecommerce_agents')
     Wait-ForHealth -Name 'Redis' -Probe @('exec', 'redis', 'redis-cli', 'ping')
-    Repair-StaleDatabaseVolume
+    Assert-DatabaseCredentials
     Assert-DatabaseSchema
     Write-Ok 'Infrastructure is ready'
 
     # ── Seed ─────────────────────────────────────────────────
     Write-Step 'Running database seeder'
-    Invoke-Compose -Arguments @('--profile', 'seed', 'run', '--rm', 'seeder')
+    Invoke-DatabasePreparation
     Write-Ok 'Database seeded'
 
     if ($InfraOnly) {

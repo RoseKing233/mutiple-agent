@@ -21,16 +21,23 @@ SHARED_DIR = PROMPTS_DIR / "_shared"
 @lru_cache(maxsize=32)
 def _load_yaml(path: Path) -> dict:
     """Load and cache a YAML file."""
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
 
 
-def load_prompt(agent_name: str, user_role: str = "customer") -> str:
+def load_role_instructions(agent_name: str, user_role: str) -> str:
+    """Load just the role block for request-time ContextProviders."""
+    config = _load_yaml(PROMPTS_DIR / f"{agent_name}.yaml")
+    roles = config.get("system_prompt", {}).get("role_instructions", {})
+    return roles.get(user_role, roles.get("customer", "")).strip()
+
+
+def load_prompt(agent_name: str, user_role: str | None = "customer") -> str:
     """Load and compose the system prompt for an agent.
 
     Args:
         agent_name: Agent identifier matching the YAML filename (e.g., "orchestrator")
-        user_role: User's role for role-specific prompt sections
+        user_role: User's role; None omits the role block for request-time injection.
 
     Returns:
         Composed system prompt string
@@ -58,7 +65,7 @@ def load_prompt(agent_name: str, user_role: str = "customer") -> str:
 
     # 3. Role-specific instructions
     role_instructions = sp.get("role_instructions", {})
-    role_text = role_instructions.get(user_role, role_instructions.get("customer", ""))
+    role_text = role_instructions.get(user_role, role_instructions.get("customer", "")) if user_role is not None else ""
     if role_text:
         parts.append(f"## Your Role Context\n{role_text.strip()}")
 
