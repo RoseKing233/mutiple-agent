@@ -26,9 +26,9 @@ test.describe("recommendation evidence", () => {
         if (req.url().includes("/recommendation-reasons")) paidRequests.push(req.url());
       });
       await page.goto(`/shop/products/${product.id}`);
-      const panel = page.getByRole("region", { name: "Recommendation reasons" });
-      await expect(panel.getByRole("heading", { name: "Why this product?" })).toBeVisible();
-      await panel.getByRole("button", { name: "View source evidence" }).click();
+      const panel = page.getByRole("region", { name: "Product suitability assessment" });
+      await expect(panel.getByRole("heading", { name: "Is this product right for me?" })).toBeVisible();
+      await panel.getByRole("button", { name: "View product info & reviews" }).click();
       await expect(panel.getByText("Includes AI-authored demo material.", { exact: false })).toBeVisible();
       await expect(panel.getByText("Synthetic demo review", { exact: false }).first()).toBeVisible();
       await expect(panel.getByText("Review evidence:", { exact: false })).toBeVisible();

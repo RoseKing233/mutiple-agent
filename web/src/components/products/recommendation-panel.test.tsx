@@ -15,14 +15,14 @@ describe("recommendation panel", () => {
   it("loads no paid content automatically and validates the request", async () => {
     render(<RecommendationPanel productId="p1" />);
     expect(api.generateRecommendationReasons).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByText("Generate recommendation reasons"));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Describe what matters");
+    fireEvent.click(screen.getByText("Assess this product for me"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Describe how you plan to use this product");
     expect(api.generateRecommendationReasons).not.toHaveBeenCalled();
   });
   it("can inspect evidence without calling the AI and labels demo reviews", async () => {
     vi.mocked(api.getRecommendationEvidence).mockResolvedValue(evidence as never);
     render(<RecommendationPanel productId="p1" />);
-    fireEvent.click(screen.getByText("View source evidence"));
+    fireEvent.click(screen.getByText("View product info & reviews"));
     expect(await screen.findByText("Fictional demo feedback")).toBeInTheDocument();
     expect(screen.getByText("Synthetic reviews are not real customer feedback.")).toBeInTheDocument();
     expect(api.generateRecommendationReasons).not.toHaveBeenCalled();
@@ -35,10 +35,10 @@ describe("recommendation panel", () => {
       usage: { input_tokens: 10, output_tokens: 5 },
     } as never);
     render(<RecommendationPanel productId="p1" />);
-    fireEvent.change(screen.getByLabelText("What matters to you?"), { target: { value: "commuting" } });
+    fireEvent.change(screen.getByLabelText("Your needs and intended use"), { target: { value: "commuting" } });
     fireEvent.change(screen.getByLabelText("Maximum budget (USD, optional)"), { target: { value: "0" } });
     fireEvent.change(screen.getByLabelText("Response language"), { target: { value: "zh" } });
-    fireEvent.click(screen.getByText("Generate recommendation reasons"));
+    fireEvent.click(screen.getByText("Assess this product for me"));
     expect(await screen.findByText("This demo review describes commuting.")).toBeInTheDocument();
     expect(api.generateRecommendationReasons).toHaveBeenCalledWith("p1", {preferences: "commuting", max_budget: 0, language: "zh"}, expect.any(AbortSignal));
     expect(screen.getByRole("link", { name: "[1]" })).toHaveAttribute("href", "#p1-review:1");
@@ -51,15 +51,15 @@ describe("recommendation panel", () => {
   it("shows service failure and restores the button", async () => {
     vi.mocked(api.generateRecommendationReasons).mockRejectedValue(new Error("AI recommendation is unavailable."));
     render(<RecommendationPanel productId="p1" />);
-    fireEvent.change(screen.getByLabelText("What matters to you?"), { target: { value: "commute" } });
-    fireEvent.click(screen.getByText("Generate recommendation reasons"));
+    fireEvent.change(screen.getByLabelText("Your needs and intended use"), { target: { value: "commute" } });
+    fireEvent.click(screen.getByText("Assess this product for me"));
     expect(await screen.findByRole("alert")).toHaveTextContent("unavailable");
-    await waitFor(() => expect(screen.getByText("Generate recommendation reasons")).toBeEnabled());
+    await waitFor(() => expect(screen.getByText("Assess this product for me")).toBeEnabled());
   });
   it("aborts pending work on leaving a product", async () => {
     vi.mocked(api.getRecommendationEvidence).mockReturnValue(new Promise(() => {}));
     const view = render(<RecommendationPanel productId="p1" />);
-    fireEvent.click(screen.getByText("View source evidence"));
+    fireEvent.click(screen.getByText("View product info & reviews"));
     const signal = vi.mocked(api.getRecommendationEvidence).mock.calls[0][1];
     expect(signal?.aborted).toBe(false);
     view.unmount();

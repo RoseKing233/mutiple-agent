@@ -11,7 +11,7 @@
 | 引用 | 每个观点带来源 ID；接口拒绝不存在的引用和来源类型错误的摘要 |
 | 资料不足 | 显示缺少文档、没有评价、样本较少、库存未知或缺货等提示 |
 | 数据填充 | 50 件原始演示商品的介绍，以及其中 8 件商品的购买参考和 16 条模拟评价 |
-| 页面 | 商品详情中的 **Why this product?**，支持需求、预算、英文/中文输出及来源展开 |
+| 页面 | 商品详情中的 **Is this product right for me?**，支持需求、预算、英文/中文输出及来源展开 |
 | Agent 集成 | Product Discovery 增加读取依据和生成理由两个 MAF 工具；直接调用和 MCP 模式均注册 |
 | 费用记录 | 返回 input/output token 数，并记录 `usage_logs`；浏览商品或查看资料不会触发 AI 生成 |
 
@@ -43,12 +43,12 @@ cd C:\Users\13506\Desktop\5620\mutiple-agent\web
 pnpm dev --hostname 127.0.0.1
 ```
 
-浏览器访问 <http://127.0.0.1:3000/shop/products>，搜索 `Sony`，进入 **Sony WH-1000XM5** 商品详情，向下找到 **Why this product?**。
+浏览器访问 <http://127.0.0.1:3000/shop/products>，搜索 `Sony`，进入 **Sony WH-1000XM5** 商品详情，向下找到 **Is this product right for me?**。
 
-1. 点击 **View source evidence**：无需 API key，读取数据库资料和来源。
+1. 点击 **View product info & reviews**：无需 API key，读取数据库资料和来源。
 2. 填写需求，例如 `I need noise cancelling for commuting and multipoint connection.`。
 3. 预算填 `350`，语言选 English 或中文。
-4. 点击 **Generate recommendation reasons**：这一步才调用模型，消耗 API 额度。
+4. 点击 **Assess this product for me**：这一步才调用模型，消耗 API 额度。
 5. 检查摘要、推荐理由和取舍，点击引用编号核对来源；再用低于商品价格的预算检验预算提示。
 
 这一商品页面的功能只需要数据库、Redis、orchestrator 和 web。若要通过整个聊天机器人演示，还需要按原项目启动步骤运行 Product Discovery 等 specialist 服务并配置 `AGENT_REGISTRY`。已注册工具不等于已经完成真实模型的聊天联调。

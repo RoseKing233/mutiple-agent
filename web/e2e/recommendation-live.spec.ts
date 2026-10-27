@@ -13,12 +13,12 @@ test("live Chinese recommendation respects a low budget and opens cited sources"
   expect(product).toBeDefined();
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(`/shop/products/${product.id}`);
-  const panel = page.getByRole("region", { name: "Recommendation reasons" });
-  await panel.getByLabel("What matters to you?").fill("我想买通勤用的降噪耳机，预算最多100美元，请说明这款是否适合和它的限制。");
+  const panel = page.getByRole("region", { name: "Product suitability assessment" });
+  await panel.getByLabel("Your needs and intended use").fill("我想买通勤用的降噪耳机，预算最多100美元，请说明这款是否适合和它的限制。");
   await panel.getByLabel("Maximum budget (USD, optional)").fill("100");
   await panel.getByLabel("Response language").selectOption("zh");
   const generated = page.waitForResponse((r) => r.url().includes("/recommendation-reasons"), { timeout: 60000 });
-  await panel.getByRole("button", { name: "Generate recommendation reasons" }).click();
+  await panel.getByRole("button", { name: "Assess this product for me" }).click();
   const generatedResponse = await generated;
   expect(generatedResponse.status()).toBe(200);
   const result = await generatedResponse.json();

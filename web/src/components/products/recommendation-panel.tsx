@@ -19,7 +19,7 @@ export function RecommendationPanel({ productId }: { productId: string }) {
 
   async function load(generate: boolean) {
     if (generate && !preferences.trim()) {
-      setError("Describe what matters to you before generating a recommendation.");
+      setError("Describe how you plan to use this product and what you need from it.");
       return;
     }
     const maxBudget = budget.trim() ? Number(budget) : null;
@@ -52,16 +52,16 @@ export function RecommendationPanel({ productId }: { productId: string }) {
   }
 
   return (
-    <section aria-label="Recommendation reasons" className="my-6 space-y-4 rounded-xl border bg-card p-5 text-card-foreground">
+    <section aria-label="Product suitability assessment" className="my-6 space-y-4 rounded-xl border bg-card p-5 text-card-foreground">
       <div>
-        <h2 className="text-lg font-semibold">Why this product?</h2>
-        <p className="text-sm text-muted-foreground">Assess the fit using product information, documents and customer reviews.</p>
+        <h2 className="text-lg font-semibold">Is this product right for me?</h2>
+        <p className="text-sm text-muted-foreground">See how well this product fits your needs, with reasons and drawbacks based on product details, documents and reviews.</p>
       </div>
       <label className="block text-sm font-medium">
-        What matters to you?
+        Your needs and intended use
         <textarea className="mt-1 block min-h-20 w-full rounded-md border bg-background p-2 font-normal"
           value={preferences} onChange={(event) => setPreferences(event.target.value)} maxLength={1500}
-          placeholder="For example: noise cancelling for commuting and a lightweight design" disabled={busy} />
+          placeholder="Example: I need it for daily commuting. It should be lightweight, durable and easy to carry." disabled={busy} />
       </label>
       <div className="flex flex-wrap gap-4">
         <label className="text-sm font-medium">Maximum budget (USD, optional)
@@ -77,10 +77,10 @@ export function RecommendationPanel({ productId }: { productId: string }) {
         </label>
       </div>
       <div className="flex flex-wrap gap-2">
-        <Button disabled={busy} onClick={() => load(true)}>Generate recommendation reasons</Button>
-        <Button variant="outline" disabled={busy} onClick={() => load(false)}>View source evidence</Button>
+        <Button disabled={busy} onClick={() => load(true)}>Assess this product for me</Button>
+        <Button variant="outline" disabled={busy} onClick={() => load(false)}>View product info &amp; reviews</Button>
       </div>
-      {busy && <p role="status" className="text-sm text-muted-foreground">Loading assessment…</p>}
+      {busy && <p role="status" className="text-sm text-muted-foreground">Preparing results…</p>}
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       {evidence && <>
         <ul className="space-y-1 text-sm text-muted-foreground">
