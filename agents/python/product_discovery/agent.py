@@ -9,6 +9,7 @@ from agent_framework import Agent
 from agent_framework._mcp import MCPStreamableHTTPTool
 
 from product_discovery.prompts import get_system_prompt
+from product_discovery.recommendation_tools import recommendation_evidence_tool, recommendation_reasons_tool
 from product_discovery.tools import (
     compare_products,
     find_similar_products,
@@ -35,6 +36,8 @@ from shared.tools.user_tools import get_purchase_history, get_user_profile
 _mcp_product_http_client = None
 
 AGENT_TOOLS = [
+    recommendation_evidence_tool,
+    recommendation_reasons_tool,
     search_products,
     get_product_details,
     compare_products,
@@ -74,6 +77,8 @@ def create_product_discovery_agent() -> Agent:
         )
         tools: list = [
             mcp_product,
+            recommendation_evidence_tool,
+            recommendation_reasons_tool,
             semantic_search,
             find_similar_products,
             check_stock,

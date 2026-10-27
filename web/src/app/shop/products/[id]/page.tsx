@@ -10,6 +10,7 @@ import { formatPrice } from "@/lib/format";
 import { productImageUrl } from "@/lib/images";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { RecommendationPanel } from "@/components/products/recommendation-panel";
 
 interface ProductDetail {
   id: string;
@@ -168,6 +169,7 @@ export default function ProductDetailPage() {
           )}
         </div>
       </div>
+      {product && <RecommendationPanel key={product.id} productId={product.id} />}
     </div>
   );
 }

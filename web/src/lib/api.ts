@@ -1,3 +1,7 @@
+import {
+  recommendationSchema, recommendationEvidenceSchema, type RecommendationInput,
+} from "./recommendation-types";
+
 /**
  * Base URL for API calls. Empty by default: the browser talks to its own
  * origin and `src/app/api/[...path]/route.ts` forwards to the orchestrator, so
@@ -723,6 +727,18 @@ class ApiClient {
 
   getProduct(id: string) {
     return this.request<any>(`/api/products/${id}`);
+  }
+
+  async getRecommendationEvidence(id: string, signal?: AbortSignal) {
+    const data = await this.request<unknown>(`/api/products/${encodeURIComponent(id)}/recommendation-evidence`, { signal });
+    return recommendationEvidenceSchema.parse(data);
+  }
+
+  async generateRecommendationReasons(id: string, input: RecommendationInput, signal?: AbortSignal) {
+    const data = await this.request<unknown>(`/api/products/${encodeURIComponent(id)}/recommendation-reasons`, {
+      method: "POST", body: JSON.stringify(input), signal,
+    });
+    return recommendationSchema.parse(data);
   }
 
   // Cart

@@ -38,6 +38,7 @@ import {
   Plus,
 } from "lucide-react";
 import { productImageUrl } from "@/lib/images";
+import { RecommendationPanel } from "@/components/products/recommendation-panel";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -458,6 +459,8 @@ export default function ProductDetailPage() {
                   </p>
                 </CardContent>
               </Card>
+
+              <RecommendationPanel key={product.id} productId={product.id} />
 
               {/* Specs */}
               {product.specs &&

@@ -592,8 +592,9 @@ async def seed_reviews(conn: asyncpg.Connection, user_ids: dict[str, uuid.UUID],
 
         created = datetime.now(timezone.utc) - timedelta(days=random.randint(1, 180))
         await conn.execute(
-            """INSERT INTO reviews (product_id, user_id, rating, title, body, verified_purchase, is_flagged, created_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)""",
+            """INSERT INTO reviews
+               (product_id, user_id, rating, title, body, verified_purchase, is_flagged, created_at, is_synthetic)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, TRUE)""",
             product["id"], user_id, rating, title, body, verified, is_fake, created,
         )
         count += 1

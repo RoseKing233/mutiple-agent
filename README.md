@@ -67,6 +67,8 @@ Companion demo repo for the AI article series on [nitinksingh.com](https://nitin
 
 ## Where to start
 
+**ELEC5620 group extension (Python):** [Recommendation reasons — setup, API and demo guide](docs/recommendation-reasons.md).
+
 | I want to... | Go here |
 |---|---|
 | **Just run it** | [Run it](#run-it) above — Docker, one command |
