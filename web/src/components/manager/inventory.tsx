@@ -469,7 +469,7 @@ function NewProductForm({ onCreated }: { onCreated: () => void }) {
   return (
     <details className="rounded-lg border p-2">
       <summary className="cursor-pointer text-sm font-medium">New product</summary>
-      {/* AI marketing helpers (title/copy/image generation) attach here in phase 2. */}
+      <MarketingAssist form={form} apply={(patch) => setForm((current) => ({ ...current, ...patch }))} />
       <div className="mt-2 grid gap-2 sm:grid-cols-2">
         <Input placeholder="Name" value={form.name} onChange={set("name")} />
         <Input placeholder="Category" value={form.category} onChange={set("category")} />
@@ -478,6 +478,10 @@ function NewProductForm({ onCreated }: { onCreated: () => void }) {
         <textarea placeholder="Description" className="min-h-20 rounded-lg border border-input bg-background p-2 text-sm sm:col-span-2"
           value={form.description} onChange={set("description")} />
         <Input placeholder="Image URL (optional)" className="sm:col-span-2" value={form.image_url} onChange={set("image_url")} />
+        {form.image_url && (
+          // eslint-disable-next-line @next/next/no-img-element -- product images are plain <img> across the app
+          <img src={form.image_url} alt="Selected product image" className="h-32 w-32 rounded-lg border object-cover sm:col-span-2" />
+        )}
         <select className={selectClass} value={form.warehouse_id} onChange={set("warehouse_id")} aria-label="Initial warehouse">
           <option value="">No initial stock</option>
           {warehouses.data?.warehouses.filter((w) => w.is_active).map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
@@ -489,5 +493,109 @@ function NewProductForm({ onCreated }: { onCreated: () => void }) {
       </div>
       {error && <p className="mt-2 text-sm text-destructive">{error}</p>}
     </details>
+  );
+}
+
+// ── AI marketing assist (Stage 1 UC3/UC4): candidates only, nothing saved until "Save product" ──
+
+interface CopyVariant { angle: string; title: string; description: string; highlights: string[] }
+interface GeneratedImage { id: string; url: string }
+type ListingDraft = { name: string; category: string; brand: string; price: string; description: string; image_url: string };
+
+function MarketingAssist({ form, apply }: { form: ListingDraft; apply: (patch: Partial<ListingDraft>) => void }) {
+  const [keywords, setKeywords] = useState("");
+  const [audience, setAudience] = useState("");
+  const [tone, setTone] = useState("friendly");
+  const [style, setStyle] = useState("studio");
+  const [background, setBackground] = useState("");
+  const [variants, setVariants] = useState<CopyVariant[]>([]);
+  const [images, setImages] = useState<GeneratedImage[]>([]);
+  const [busy, setBusy] = useState<"copy" | "images" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const ready = Boolean(form.name && form.category);
+
+  async function generate(kind: "copy" | "images") {
+    setBusy(kind);
+    setError(null);
+    try {
+      if (kind === "copy") {
+        const r = await api.inventory<{ variants: CopyVariant[] }>("/marketing/copy", "POST", {
+          name: form.name, category: form.category, brand: form.brand || null,
+          price: Number(form.price) > 0 ? Number(form.price) : null, description: form.description,
+          keywords: keywords.split(",").map((k) => k.trim()).filter(Boolean).slice(0, 10), audience, tone,
+        });
+        setVariants(r.variants);
+      } else {
+        const r = await api.inventory<{ images: GeneratedImage[] }>("/marketing/images", "POST", {
+          name: form.name, category: form.category, description: form.description, style, background,
+        });
+        setImages(r.images);
+      }
+    } catch (e) {
+      // The form keeps its values: the manager can retry or fill it in by hand.
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="mt-2 rounded-lg border border-dashed p-2">
+      <p className="text-xs font-medium">AI marketing assist <span className="font-normal text-muted-foreground">— fill name and category first; you choose what to use</span></p>
+      <div className="mt-2 flex flex-wrap items-end gap-2">
+        <Field label="Selling points (comma separated)"><Input className="w-56" value={keywords} onChange={(e) => setKeywords(e.target.value)} /></Field>
+        <Field label="Audience"><Input className="w-36" value={audience} onChange={(e) => setAudience(e.target.value)} /></Field>
+        <Field label="Tone">
+          <select className={selectClass} value={tone} onChange={(e) => setTone(e.target.value)}>
+            {["friendly", "professional", "premium", "playful"].map((t) => <option key={t}>{t}</option>)}
+          </select>
+        </Field>
+        <Button size="sm" disabled={!ready || busy !== null} onClick={() => generate("copy")}>
+          {busy === "copy" ? <Loader2 className="animate-spin" /> : <Sparkles />}Generate title & copy
+        </Button>
+      </div>
+      <div className="mt-2 flex flex-wrap items-end gap-2">
+        <Field label="Image style">
+          <select className={selectClass} value={style} onChange={(e) => setStyle(e.target.value)}>
+            {["studio", "lifestyle", "minimal", "festive"].map((s) => <option key={s}>{s}</option>)}
+          </select>
+        </Field>
+        <Field label="Background (optional)"><Input className="w-48" value={background} onChange={(e) => setBackground(e.target.value)} /></Field>
+        <Button size="sm" disabled={!ready || busy !== null} onClick={() => generate("images")}>
+          {busy === "images" ? <Loader2 className="animate-spin" /> : <Sparkles />}Generate images
+        </Button>
+        {busy === "images" && <span className="text-xs text-muted-foreground">About 10–20 seconds…</span>}
+      </div>
+      {error && <p role="alert" className="mt-2 text-sm text-destructive">{error}</p>}
+      {variants.length > 0 && (
+        <div className="mt-2 grid gap-2 md:grid-cols-3">
+          {variants.map((v, i) => (
+            <div key={i} className="flex flex-col gap-1 rounded-lg border p-2 text-sm">
+              {v.angle && <Badge variant="outline">{v.angle}</Badge>}
+              <p className="font-medium">{v.title}</p>
+              <p className="text-muted-foreground">{v.description}</p>
+              <ul className="list-disc pl-4 text-xs text-muted-foreground">{v.highlights.map((h) => <li key={h}>{h}</li>)}</ul>
+              <Button size="sm" variant="outline" className="mt-auto"
+                onClick={() => apply({ name: v.title, description: [v.description, ...v.highlights.map((h) => `• ${h}`)].join("\n") })}>
+                Use this version
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+      {images.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {images.map((img) => (
+            <div key={img.id} className="flex flex-col items-center gap-1">
+              {/* eslint-disable-next-line @next/next/no-img-element -- generated images are served by the API proxy */}
+              <img src={img.url} alt="AI generated product candidate" className="h-32 w-32 rounded-lg border object-cover" />
+              <Button size="sm" variant={form.image_url === img.url ? "default" : "outline"} onClick={() => apply({ image_url: img.url })}>
+                {form.image_url === img.url ? "Selected" : "Use this image"}
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

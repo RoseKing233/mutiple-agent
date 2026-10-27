@@ -125,6 +125,6 @@
 
 | 推荐 | 理由 | 估计工作量 |
 |---|---|---|
-| **上架时的 AI 营销辅助**（Stage 1 UC3/UC4，Xinyu 第二阶段） | 新增商品表单里"AI 生成标题/文案（3 版）"和"AI 生成商品图（gpt-image-1-mini，纯文字生成图片）"，经理选择后自动填进表单。已实测 key 可以用（9 秒一张，不到 1 美分）。表单里预留了位置（`NewProductForm` 里的注释）。 | 文案约 2 小时，图片约半天 |
+| ~~上架时的 AI 营销辅助~~ | **已完成**，在分支 `feature/marketing-assist`，见 `docs/marketing-assist/README.md` | — |
 | **客服的语音和图片输入**（Stage 1 p.5、UC1，原本是 Zihan 的需求） | 报告里写了支持语音和图片，现在都没实现。语音可以用浏览器 Web Speech API 纯前端实现；图片可以用 GPT-4.1 视觉能力识别商品。属于评分第 (5) 类"不同能力的 AI 模型"。 | 语音约半天（纯前端） |
 | **GitHub Actions CI** | 仓库里已经有 `.github/workflows/tests.yml`，改成适配我们的分支后，PR 时自动跑测试。属于评分第 (4) 类，也能给 Agile 分（反馈循环）加分。需要仓库管理员开 Actions。 | 约 1–2 小时 |

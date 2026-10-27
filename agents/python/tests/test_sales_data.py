@@ -14,7 +14,7 @@ from scripts.sales_data.generator import NAMESPACE, generate
 from scripts.sales_data.validate import validate_database, validate_simulation
 from scripts.sales_data.writer import write_simulation
 from scripts.seed import seed_database
-from shared.db_migrations import apply_migrations
+from shared.db_migrations import apply_migrations, migration_directory
 from shared.inventory_ledger import change_inventory
 
 
@@ -96,12 +96,10 @@ async def insert_stock(conn, quantity=10):
 async def test_migration_baselines_existing_inventory_without_replaying_orders(clean_db):
     async with clean_db.acquire() as conn:
         pid, wh = await insert_stock(conn, 17)
-        assert await apply_migrations(conn) == [
-            "001_sales_inventory_history.sql",
-            "002_manager_analysis.sql",
-            "003_analysis_runs.sql",
-            "004_inventory_management.sql",
-        ]
+        # Every migration file, in order; later modules add files without editing this test.
+        expected = sorted(p.name for p in migration_directory().glob("[0-9]*.sql"))
+        assert expected[:3] == ["001_sales_inventory_history.sql", "002_manager_analysis.sql", "003_analysis_runs.sql"]
+        assert await apply_migrations(conn) == expected
         assert await apply_migrations(conn) == []
         rows = await conn.fetch("SELECT * FROM inventory_movements WHERE product_id=$1", pid)
         assert len(rows) == 1 and rows[0]["quantity_delta"] == 17
