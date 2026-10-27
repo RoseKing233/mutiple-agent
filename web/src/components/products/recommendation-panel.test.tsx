@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RecommendationPanel } from "./recommendation-panel";
 import { api } from "@/lib/api";
@@ -30,6 +30,7 @@ describe("recommendation panel", () => {
   it("passes zero budget and language, renders reasons with source links", async () => {
     vi.mocked(api.generateRecommendationReasons).mockResolvedValue({
       ...evidence, product_id: "p1", product_name: "Test", preferences: "commuting", budget_fit: false,
+      needs_assessment: { status: "does_not_meet", text: "It exceeds your budget.", source_ids: ["review:1"] },
       product_summary: [], review_summary: [], cautions: [],
       reasons: [{ text: "This demo review describes commuting.", source_ids: ["review:1"] }],
       usage: { input_tokens: 10, output_tokens: 5 },
@@ -41,12 +42,34 @@ describe("recommendation panel", () => {
     fireEvent.click(screen.getByText("Assess this product for me"));
     expect(await screen.findByText("This demo review describes commuting.")).toBeInTheDocument();
     expect(api.generateRecommendationReasons).toHaveBeenCalledWith("p1", {preferences: "commuting", max_budget: 0, language: "zh"}, expect.any(AbortSignal));
-    expect(screen.getByRole("link", { name: "[1]" })).toHaveAttribute("href", "#p1-review:1");
+    const directAnswer = screen.getByRole("region", { name: "Answer to your request" });
+    expect(within(directAnswer).getByRole("link", { name: "[1]" })).toHaveAttribute("href", "#p1-review:1");
     const details = screen.getByText("Sources (1)").closest("details");
     expect(details).not.toHaveAttribute("open");
-    fireEvent.click(screen.getByRole("link", { name: "[1]" }));
+    fireEvent.click(within(directAnswer).getByRole("link", { name: "[1]" }));
     expect(details).toHaveAttribute("open");
     expect(screen.getByText("This product exceeds your stated budget.")).toBeInTheDocument();
+  });
+  it("answers the missing colour question before summaries even when the budget fits", async () => {
+    const catalogue = { ...source, id: "product:1", kind: "catalogue", title: "Bottle", text: "32oz steel bottle", is_synthetic: false };
+    vi.mocked(api.generateRecommendationReasons).mockResolvedValue({
+      ...evidence, sources: [catalogue], product_id: "p1", product_name: "Bottle", preferences: "I want red", budget_fit: true,
+      needs_assessment: { status: "cannot_confirm", text: "A red version cannot be confirmed because colours are not specified. Check the colour options with the seller.", source_ids: ["product:1"] },
+      product_summary: [{ text: "32oz steel bottle", source_ids: ["product:1"] }], review_summary: [],
+      reasons: [{ text: "It is within budget.", source_ids: ["product:1"] }], cautions: [],
+      usage: { input_tokens: 10, output_tokens: 5 },
+    } as never);
+    render(<RecommendationPanel productId="p1" />);
+    fireEvent.change(screen.getByLabelText("Your needs and intended use"), { target: { value: "I want red" } });
+    fireEvent.click(screen.getByText("Assess this product for me"));
+    const answer = await screen.findByRole("region", { name: "Answer to your request" });
+    expect(answer).toHaveTextContent("Cannot confirm from the available information");
+    expect(answer).toHaveTextContent("A red version cannot be confirmed");
+    expect(answer.compareDocumentPosition(screen.getByRole("heading", { name: "Product and document summary" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(answer.compareDocumentPosition(screen.getByText("Synthetic reviews are not real customer feedback.")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByText("Supported by the available evidence")).not.toBeInTheDocument();
+    fireEvent.click(within(answer).getByRole("link", { name: "[1]" }));
+    expect(screen.getByText("Sources (1)").closest("details")).toHaveAttribute("open");
   });
   it("shows service failure and restores the button", async () => {
     vi.mocked(api.generateRecommendationReasons).mockRejectedValue(new Error("AI recommendation is unavailable."));

@@ -16,8 +16,9 @@ from shared.recommendations import (
 EVIDENCE = {"sources": [{"id": "p:1", "kind": "catalogue"}, {"id": "r:1", "kind": "review"}]}
 
 
-def draft(**overrides: list[dict]) -> RecommendationDraft:
+def draft(**overrides: object) -> RecommendationDraft:
     fields = {
+        "needs_assessment": {"status": "meets_needs", "text": "ANC is listed.", "source_ids": ["p:1"]},
         "product_summary": [],
         "review_summary": [],
         "reasons": [{"text": "Catalogue lists ANC.", "source_ids": ["p:1"]}],
@@ -65,6 +66,35 @@ def test_no_reviews_cannot_produce_review_summary() -> None:
 def test_empty_citation_list_rejected() -> None:
     with pytest.raises(ValidationError):
         draft(reasons=[{"text": "Unsupported", "source_ids": []}])
+
+
+def test_direct_answer_is_required_even_when_summaries_are_present() -> None:
+    fields = draft().model_dump()
+    del fields["needs_assessment"]
+    with pytest.raises(ValidationError):
+        RecommendationDraft.model_validate(fields)
+
+
+@pytest.mark.parametrize("source_ids", [["unknown"], ["p:1", "unknown"]])
+def test_direct_answer_cannot_cite_invented_variant_evidence(source_ids: list[str]) -> None:
+    with pytest.raises(RecommendationUnavailableError):
+        validate_recommendation(
+            draft(needs_assessment={"status": "meets_needs", "text": "Red is in stock.", "source_ids": source_ids}),
+            EVIDENCE,
+        )
+
+
+def test_uncertainty_answer_can_reference_the_catalogue_checked() -> None:
+    validate_recommendation(
+        draft(
+            needs_assessment={
+                "status": "cannot_confirm",
+                "text": "The catalogue does not specify colours, so a red version cannot be confirmed.",
+                "source_ids": ["p:1"],
+            }
+        ),
+        EVIDENCE,
+    )
 
 
 @pytest.mark.parametrize("mcp", [False, True])

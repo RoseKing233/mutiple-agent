@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 import yaml
@@ -44,9 +44,14 @@ class CitedPoint(BaseModel):
     source_ids: list[str] = Field(min_length=1, max_length=8)
 
 
+class NeedsAssessment(CitedPoint):
+    status: Literal["meets_needs", "does_not_meet", "cannot_confirm"]
+
+
 class RecommendationDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    needs_assessment: NeedsAssessment
     product_summary: list[CitedPoint] = Field(max_length=4)
     review_summary: list[CitedPoint] = Field(max_length=4)
     reasons: list[CitedPoint] = Field(min_length=1, max_length=5)
@@ -196,8 +201,9 @@ def validate_recommendation(draft: RecommendationDraft, evidence: dict[str, Any]
     visible evidence allow users to assess the model's interpretation.
     """
     sources = {s["id"]: s for s in evidence["sources"]}
-    for section in ("product_summary", "review_summary", "reasons", "cautions"):
-        for point in getattr(draft, section):
+    for section in ("needs_assessment", "product_summary", "review_summary", "reasons", "cautions"):
+        points = [draft.needs_assessment] if section == "needs_assessment" else getattr(draft, section)
+        for point in points:
             if not point.text.strip() or any(s not in sources for s in point.source_ids):
                 raise RecommendationUnavailableError("The AI response contained unsupported references.")
             kinds = {sources[s]["kind"] for s in point.source_ids}

@@ -1,5 +1,5 @@
 name: recommendation-reasons
-version: "1.0"
+version: "1.1"
 system_prompt:
   base: |
     Produce a grounded product assessment for the supplied customer preferences.
@@ -8,11 +8,31 @@ system_prompt:
     more tools or use remembered product knowledge. Return only the required schema.
 
     Respond in Chinese when request.language is zh, otherwise in English.
+    needs_assessment is the DIRECT answer to the customer's specific request.
+    Start its text with the requested feature or question, not a generic product
+    description or a statement that the price is within budget. In 1-3 short
+    sentences, answer whether the product meets the stated needs, explain the
+    decisive evidence or missing information, and give a relevant next step if
+    confirmation is needed. Cover each stated requirement; do not hide an
+    unanswered requirement only in cautions.
+    Use status meets_needs only when the evidence supports all stated requirements.
+    Use does_not_meet when evidence establishes a mismatch (including budget_fit
+    false or zero available_quantity). Otherwise use cannot_confirm if any stated
+    requirement lacks evidence. A budget match alone is NOT an overall match.
+    For example, if a customer wants a red version and the supplied catalogue and
+    documents give no colour/variant information, say upfront that you cannot
+    confirm a red version and suggest checking colour options with the seller.
+    Do NOT say red is unavailable, out of stock, or available. Product-level stock
+    does not establish stock for a requested colour/size variant. Reviews,
+    synthetic documents and product images cannot establish current variant stock.
+    Cite the sources checked, including when explaining missing information.
+
     product_summary summarises the supplied catalogue and supporting documents.
     review_summary summarises the supplied review sample, including disadvantages
     where present. Return an empty review_summary when there are no review sources.
     reasons explains the fit (or lack of fit) to the stated preferences.
     cautions gives relevant evidence-backed trade-offs or mismatches.
+    Keep these supporting sections concise; do not repeat the direct answer.
     Every point MUST cite source_ids copied exactly from evidence.sources.
     Product summary points may cite only catalogue/document sources. Review summary
     points may cite only review sources. Do not cite an empty or absent source.

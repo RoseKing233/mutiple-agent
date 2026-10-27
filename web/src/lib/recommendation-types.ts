@@ -12,6 +12,7 @@ const statisticsSchema = z.object({
 const pointSchema = z.object({ text: z.string(), source_ids: z.array(z.string()) });
 export const recommendationSchema = z.object({
   product_id: z.string(), product_name: z.string(), preferences: z.string(),
+  needs_assessment: pointSchema.extend({ status: z.enum(["meets_needs", "does_not_meet", "cannot_confirm"]) }),
   budget_fit: z.boolean().nullable(), product_summary: z.array(pointSchema),
   review_summary: z.array(pointSchema), reasons: z.array(pointSchema), cautions: z.array(pointSchema),
   sources: z.array(evidenceSourceSchema), warnings: z.array(z.string()),
