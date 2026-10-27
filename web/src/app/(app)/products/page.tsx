@@ -1,6 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { Suspense, useState, useEffect, useCallback } from "react";
+import { ManagerProducts } from "@/components/manager/products";
+import { Loading } from "@/components/manager/dashboard";
+import { canAnalyze } from "@/lib/manager";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { useCart } from "@/lib/cart-context";
@@ -149,6 +152,12 @@ const SORT_OPTIONS = [
 // ---------------------------------------------------------------------------
 
 export default function ProductsPage() {
+  const { user, isLoading } = useAuth();
+  if (isLoading || !user) return null;
+  return canAnalyze(user.role) ? <Suspense fallback={<Loading />}><ManagerProducts /></Suspense> : <CustomerProductsPage />;
+}
+
+function CustomerProductsPage() {
   const router = useRouter();
   const { user, isLoading: authLoading } = useAuth();
   const { addItem } = useCart();
@@ -400,6 +409,7 @@ export default function ProductsPage() {
                     <Button
                       variant="outline"
                       size="icon"
+                      aria-label={addedIds.has(product.id) ? "Added to cart" : "Add to cart"}
                       className={`shrink-0 transition-colors ${
                         addedIds.has(product.id)
                           ? "border-emerald-300 bg-emerald-50 text-emerald-600"

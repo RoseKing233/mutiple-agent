@@ -83,6 +83,7 @@ services:
     command: uv run --no-project python -m scripts.seed
     volumes:
       - ./scripts:/app/scripts:ro
+      - ./docker/postgres/migrations:/app/migrations:ro
     depends_on:
       db:
         condition: service_healthy

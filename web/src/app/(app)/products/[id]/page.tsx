@@ -1,6 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { Suspense, useState, useEffect, useCallback } from "react";
+import { ManagerProductDetail } from "@/components/manager/products";
+import { Loading } from "@/components/manager/dashboard";
+import { canAnalyze } from "@/lib/manager";
 import { useRouter, useParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { useCart } from "@/lib/cart-context";
@@ -222,6 +225,12 @@ function DetailSkeleton() {
 // ---------------------------------------------------------------------------
 
 export default function ProductDetailPage() {
+  const { user, isLoading } = useAuth();
+  if (isLoading || !user) return null;
+  return canAnalyze(user.role) ? <Suspense fallback={<Loading />}><ManagerProductDetail /></Suspense> : <CustomerProductDetailPage />;
+}
+
+function CustomerProductDetailPage() {
   const router = useRouter();
   const params = useParams();
   const { user, isLoading: authLoading } = useAuth();

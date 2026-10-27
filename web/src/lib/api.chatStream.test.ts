@@ -40,6 +40,15 @@ afterEach(() => {
 });
 
 describe("chatStream SSE parsing", () => {
+  it("preserves blank lines, trailing newlines and Markdown fences in multiline data frames", async () => {
+    const parts = ["## Sales", "\n\n", "- Units: 518\n- Orders: 331\n", "\n```inventory\n{}\n```\n"];
+    const raw = parts.map((part) => part.split("\n").map((line) => `data: ${line}\n`).join("") + "\n").join("");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(fakeStreamResponse(raw + "data: [DONE]\n\n")));
+    const chunks: string[] = [];
+    await api.chatStream("history", undefined, (chunk) => chunks.push(chunk));
+    expect(chunks).toEqual(parts);
+    expect(chunks.join("")).toBe(parts.join(""));
+  });
   it("routes structured frames to onOrchestrationEvent, not onChunk, and keeps step/metadata/text intact", async () => {
     const raw = [
       "data: Hello ",

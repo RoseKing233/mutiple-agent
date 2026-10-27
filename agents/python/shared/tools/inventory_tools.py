@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Annotated
 
 from agent_framework import tool
@@ -10,7 +11,7 @@ from pydantic import Field
 from shared.db import get_pool
 
 
-@tool(name="check_stock", description="Check stock levels across all warehouses for a specific product.")
+@tool(name="check_stock", description="Check CURRENT LIVE stock across warehouses. Never historical cutoff stock.")
 async def check_stock(
     product_id: Annotated[str, Field(description="UUID of the product to check")],
 ) -> dict:
@@ -24,8 +25,9 @@ async def check_stock(
                ORDER BY w.region""",
             product_id,
         )
+        observation = {"inventory_basis": "current_live", "observed_at": datetime.now(UTC).isoformat()}
         if not rows:
-            return {"product_id": product_id, "in_stock": False, "warehouses": [], "total_quantity": 0}
+            return {"product_id": product_id, "in_stock": False, "warehouses": [], "total_quantity": 0, **observation}
 
         warehouses = [
             {
@@ -42,10 +44,14 @@ async def check_stock(
             "in_stock": total > 0,
             "total_quantity": total,
             "warehouses": warehouses,
+            **observation,
         }
 
 
-@tool(name="get_warehouse_availability", description="Get detailed warehouse availability for a product including restock schedules.")
+@tool(
+    name="get_warehouse_availability",
+    description="Get detailed warehouse availability for a product including restock schedules.",
+)
 async def get_warehouse_availability(
     product_id: Annotated[str, Field(description="UUID of the product")],
 ) -> dict:

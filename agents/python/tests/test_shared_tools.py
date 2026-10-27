@@ -11,6 +11,8 @@ No live LLM. No mocked DB — always a real Postgres container.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import asyncpg
 import pytest
 import pytest_asyncio
@@ -210,6 +212,8 @@ async def test_check_stock_unknown_product_returns_empty(db_pool: asyncpg.Pool) 
     result = await check_stock(product_id=str(_uuid.uuid4()))
     assert result["in_stock"] is False
     assert result["total_quantity"] == 0
+    assert result["inventory_basis"] == "current_live"
+    assert datetime.fromisoformat(result["observed_at"]).tzinfo is not None
 
 
 @pytest.mark.asyncio
@@ -229,6 +233,8 @@ async def test_check_stock_returns_warehouse_data(db_pool: asyncpg.Pool, seeded_
     assert result["in_stock"] is True
     assert result["total_quantity"] == 50
     assert len(result["warehouses"]) == 1
+    assert result["inventory_basis"] == "current_live"
+    assert datetime.fromisoformat(result["observed_at"]).tzinfo is not None
 
 
 @pytest.mark.asyncio

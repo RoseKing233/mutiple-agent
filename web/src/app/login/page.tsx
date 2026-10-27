@@ -35,8 +35,8 @@ export default function LoginPage() {
 
     setIsLoading(true);
     try {
-      await login(email, password);
-      router.push("/chat");
+      const user = await login(email, password);
+      router.push(user.role === "store_manager" ? "/analysis" : "/chat");
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Login failed. Please try again.";

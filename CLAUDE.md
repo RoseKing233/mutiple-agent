@@ -188,11 +188,22 @@ AZURE_OPENAI_API_VERSION=2024-12-01-preview
 
 ## Database
 
-- Schema in `docker/postgres/init.sql` (34 tables)
+- Base schema in `docker/postgres/init.sql`; additive versions in `docker/postgres/migrations/`.
 - All queries use parameterized `$1, $2` syntax (asyncpg)
 - All user-facing queries filter by `user_email` or `user_id`
 - Embeddings stored as `vector(1536)` with ivfflat cosine index
-- Seeder (`scripts/seed.py`) is deterministic (`random.seed(42)`) — reproducible demo data
+- Seeder (`scripts/seed.py`) preserves existing data by default; `--reset` explicitly rebuilds demo business data.
+- Sales/inventory simulation: `scripts/sales_data/`, default 180 complete UTC days; see `docs/sales-analysis/README.md`.
+- Stock mutations must use `shared.inventory_ledger.change_inventory` inside the business transaction.
+- Migration runner: `python -m scripts.migrate`; repeated execution preserves data and verifies SQL checksums.
+- Manager role: `store_manager` (whole-store, read-only analysis), distinct from `admin` and `seller`.
+- Manager APIs: `orchestrator/routes/manager.py`, shared calculations in `shared/sales_analysis.py`.
+- Manager UI: `/analysis`, role-aware `/products` and `/products/[id]`; customer shopping is blocked for managers.
+- Forecasts/performance: `shared/forecasting/`; immutable owner-scoped reports in `sales_analysis_runs` (migration 003).
+- Inventory agent registers `shared/tools/sales_analysis_tools.py` in direct and MCP modes. Its YAML role block is
+  injected by `InventoryRoleProvider` on every run because A2A hosts retain their Agent instance across requests.
+- Forecasts use complete UTC days and historical EOD stock, never change inventory, and require no LLM key.
+- Single course-work handover: `docs/sales-analysis/README.md`; includes rules, models, APIs and integration boundaries.
 
 ## Testing & Evals
 

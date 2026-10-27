@@ -2,6 +2,17 @@ import { describe, expect, it } from "vitest";
 import { visibleGroups, labelForPath } from "./nav";
 
 describe("visibleGroups", () => {
+  it("gives managers analysis and products without shopping or admin navigation", () => {
+    const groups = visibleGroups({ isAdmin: false, isSeller: false, isManager: true });
+    const paths = groups.flatMap((g) => g.items.map((i) => i.href));
+    expect(paths).toContain("/analysis");
+    expect(paths).toContain("/products");
+    expect(paths).toContain("/chat");
+    expect(paths).not.toContain("/cart");
+    expect(paths).not.toContain("/orders");
+    expect(paths).not.toContain("/admin");
+    expect(groups[0].label).toBe("Store");
+  });
   it("shows shop + account to a plain customer, hides admin/seller", () => {
     const groups = visibleGroups({ isAdmin: false, isSeller: false });
     const labels = groups.flatMap((g) => g.items.map((i) => i.label));

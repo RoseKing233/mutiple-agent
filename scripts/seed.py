@@ -1,34 +1,47 @@
 """
-E-Commerce Agents — Database Seeder
+E-Commerce Agents Database Seeder
 
-Seeds the database with realistic e-commerce data:
-- 20 users (1 admin, 2 power_users, 2 sellers, 15 customers)
+Initializes an EMPTY database with synthetic e-commerce data; use --reset to rebuild:
+- 21 users (1 admin, 1 store manager, 2 power_users, 2 sellers, 15 customers)
 - 50 products across 5 categories
-- 200 orders with status distribution
+- Configurable 180-day coherent sales/inventory history
 - 500 reviews (5% fake)
 - 3 warehouses, 3 carriers, shipping rates
 - 15 coupons, 5 promotions, 3 loyalty tiers
-- 90-day price history
+- Price history aligned with the sales simulation
 - 6 agent catalog entries + permissions
 
-Usage: uv run python -m scripts.seed
+Usage from repo root: python -m scripts.seed [--days 180] [--end-date YYYY-MM-DD] [--reset]
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import logging
 import os
 import random
+import sys
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
 
 import asyncpg
 import bcrypt
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "agents" / "python"))
+
+from shared.db_migrations import apply_migrations
+from shared.manager_accounts import ensure_manager
 from shared.oauth.client_secrets import derive_client_secret
+
+from scripts.sales_data.config import SimulationConfig
+from scripts.sales_data.generator import NAMESPACE, generate
+from scripts.sales_data.validate import validate_database
+from scripts.sales_data.writer import write_simulation
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -281,10 +294,6 @@ ADDRESSES = [
     {"street": "741 Ash Ave", "city": "Miami", "state": "FL", "zip": "33101", "country": "US"},
 ]
 
-ORDER_STATUSES_WEIGHTED = [
-    ("placed", 10), ("confirmed", 15), ("shipped", 15),
-    ("delivered", 40), ("returned", 10), ("cancelled", 10),
-]
 
 
 # ============================================================
@@ -297,11 +306,11 @@ async def seed_users(conn: asyncpg.Connection) -> dict[str, uuid.UUID]:
     for email, password, name, role, tier, spend in USERS:
         pw_hash = hash_pw(password)
         row = await conn.fetchrow(
-            """INSERT INTO users (email, password_hash, name, role, loyalty_tier, total_spend)
-               VALUES ($1, $2, $3, $4, $5, $6)
+            """INSERT INTO users (email, password_hash, name, role, loyalty_tier, total_spend, id)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)
                ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name
                RETURNING id""",
-            email, pw_hash, name, role, tier, Decimal(str(spend)),
+            email, pw_hash, name, role, tier, Decimal(str(spend)), uuid.uuid5(NAMESPACE, email),
         )
         user_ids[email] = row["id"]
     logger.info("Seeded %d users", len(user_ids))
@@ -361,34 +370,14 @@ async def seed_warehouses(conn: asyncpg.Connection) -> list[uuid.UUID]:
     ids = []
     for name, location, region in WAREHOUSES:
         row = await conn.fetchrow(
-            "INSERT INTO warehouses (name, location, region) VALUES ($1, $2, $3) RETURNING id",
-            name, location, region,
+            "INSERT INTO warehouses (name, location, region, id) VALUES ($1, $2, $3, $4) RETURNING id",
+            name, location, region, uuid.uuid5(NAMESPACE, f"warehouse:{name}"),
         )
         ids.append(row["id"])
     logger.info("Seeded %d warehouses", len(ids))
     return ids
 
 
-async def seed_warehouse_inventory(conn: asyncpg.Connection, warehouse_ids: list[uuid.UUID], products: list[dict]) -> None:
-    """Seed inventory with varied stock levels. Some products deliberately low/out of stock."""
-    count = 0
-    for i, product in enumerate(products):
-        for j, wh_id in enumerate(warehouse_ids):
-            # Dyson V15 = out of stock everywhere
-            if product["name"] == "Dyson V15 Detect":
-                qty = 0
-            # Sony WH-1000XM5 = low stock at West
-            elif product["name"] == "Sony WH-1000XM5" and j == 2:
-                qty = 2
-            else:
-                qty = random.randint(5, 200)
-
-            await conn.execute(
-                "INSERT INTO warehouse_inventory (warehouse_id, product_id, quantity) VALUES ($1, $2, $3)",
-                wh_id, product["id"], qty,
-            )
-            count += 1
-    logger.info("Seeded %d warehouse inventory records", count)
 
 
 async def seed_carriers(conn: asyncpg.Connection) -> list[uuid.UUID]:
@@ -473,80 +462,8 @@ async def seed_loyalty_tiers(conn: asyncpg.Connection) -> None:
     logger.info("Seeded %d loyalty tiers", len(LOYALTY_TIERS))
 
 
-async def seed_orders(conn: asyncpg.Connection, user_ids: dict[str, uuid.UUID], products: list[dict]) -> list[uuid.UUID]:
-    """Seed 200 orders with realistic distribution."""
-    customer_emails = [e for e, _, _, r, _, _ in USERS if r == "customer"]
-    statuses = []
-    for status, weight in ORDER_STATUSES_WEIGHTED:
-        statuses.extend([status] * weight)
-
-    now = datetime.now(timezone.utc)
-    order_ids = []
-
-    for i in range(200):
-        email = random.choice(customer_emails)
-        user_id = user_ids[email]
-        status = random.choice(statuses)
-        address = random.choice(ADDRESSES)
-        created = now - timedelta(days=random.randint(1, 90), hours=random.randint(0, 23))
-
-        # 1-4 items per order
-        num_items = random.randint(1, 4)
-        order_products = random.sample(products, min(num_items, len(products)))
-        total = Decimal("0")
-        items = []
-        for op in order_products:
-            qty = random.randint(1, 3)
-            price = Decimal(str(op["price"]))
-            subtotal = price * qty
-            total += subtotal
-            items.append((op["id"], qty, price, subtotal))
-
-        carrier = random.choice(CARRIERS)[0]
-        tracking = f"TRK{random.randint(100000000, 999999999)}" if status in ("shipped", "out_for_delivery", "delivered") else None
-
-        row = await conn.fetchrow(
-            """INSERT INTO orders (user_id, status, total, shipping_address, billing_address, shipping_carrier, tracking_number, created_at)
-               VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8) RETURNING id""",
-            user_id, status, total, json.dumps(address), json.dumps(address), carrier, tracking, created,
-        )
-        order_id = row["id"]
-        order_ids.append(order_id)
-
-        # Insert order items
-        for product_id, qty, price, subtotal in items:
-            await conn.execute(
-                "INSERT INTO order_items (order_id, product_id, quantity, unit_price, subtotal) VALUES ($1, $2, $3, $4, $5)",
-                order_id, product_id, qty, price, subtotal,
-            )
-
-        # Insert status history
-        status_flow = _get_status_flow(status)
-        for si, s in enumerate(status_flow):
-            ts = created + timedelta(hours=si * random.randint(6, 48))
-            location = random.choice(["Warehouse", "Distribution Center", "Local Hub", "Out for delivery", ""]) if s in ("shipped", "out_for_delivery") else ""
-            await conn.execute(
-                "INSERT INTO order_status_history (order_id, status, notes, location, timestamp) VALUES ($1, $2, $3, $4, $5)",
-                order_id, s, f"Order {s}", location, ts,
-            )
-
-    logger.info("Seeded %d orders", len(order_ids))
-    return order_ids
 
 
-def _get_status_flow(final_status: str) -> list[str]:
-    """Return the status history leading to the final status."""
-    full_flow = ["placed", "confirmed", "shipped", "out_for_delivery", "delivered"]
-    if final_status == "cancelled":
-        cut = random.randint(1, 2)
-        return full_flow[:cut] + ["cancelled"]
-    if final_status == "returned":
-        return full_flow + ["returned"]
-    try:
-        idx = full_flow.index(final_status)
-        return full_flow[:idx + 1]
-    except ValueError:
-        return [final_status]
 
 
 async def seed_reviews(conn: asyncpg.Connection, user_ids: dict[str, uuid.UUID], products: list[dict]) -> None:
@@ -608,26 +525,6 @@ async def seed_reviews(conn: asyncpg.Connection, user_ids: dict[str, uuid.UUID],
     logger.info("Seeded %d reviews", count)
 
 
-async def seed_price_history(conn: asyncpg.Connection, products: list[dict]) -> None:
-    """Seed 90 days of price history for all products."""
-    now = datetime.now(timezone.utc)
-    count = 0
-    for product in products:
-        base_price = float(product["price"])
-        for day in range(90):
-            recorded = now - timedelta(days=90 - day)
-            # Occasionally have a sale (10% chance)
-            if random.random() < 0.10:
-                price = base_price * random.uniform(0.80, 0.95)
-            else:
-                price = base_price * random.uniform(0.97, 1.03)
-            price = round(price, 2)
-            await conn.execute(
-                "INSERT INTO price_history (product_id, price, recorded_at) VALUES ($1, $2, $3)",
-                product["id"], Decimal(str(price)), recorded,
-            )
-            count += 1
-    logger.info("Seeded %d price history records", count)
 
 
 async def seed_restock_schedule(conn: asyncpg.Connection, warehouse_ids: list[uuid.UUID], products: list[dict]) -> None:
@@ -918,15 +815,20 @@ async def seed_hitl_requests(conn: asyncpg.Connection, user_ids: dict[str, uuid.
     logger.info("Seeded %d HITL requests (pending + approved + rejected)", len(states))
 
 
-async def main() -> None:
-    logger.info("Connecting to database: %s", DATABASE_URL.split("@")[-1])
-    conn = await connect_with_retry(DATABASE_URL)
-
-    try:
-        # Check if already seeded
-        count = await conn.fetchval("SELECT COUNT(*) FROM users")
-        if count > 0:
-            logger.info("Database already has %d users — clearing and re-seeding", count)
+async def seed_database(conn: asyncpg.Connection, config: SimulationConfig, *, reset: bool = False) -> bool:
+    """Migrate and initialize. Existing data is retained unless reset is explicitly True."""
+    await apply_migrations(conn)
+    async with conn.transaction():
+        await conn.execute("SELECT pg_advisory_xact_lock(5620002)")
+        count = await conn.fetchval("SELECT (SELECT COUNT(*) FROM users) + (SELECT COUNT(*) FROM products)")
+        if count and not reset:
+            await ensure_manager(conn)
+            logger.info(
+                "Existing database preserved; migrations applied. Use --reset only for an intentional demo rebuild."
+            )
+            return False
+        if reset:
+            logger.warning("Explicit --reset: rebuilding business demo data")
             # Truncate all tables in dependency order. Phase-7 tables
             # (workflow_checkpoints, hitl_requests) sit at the leaves so
             # CASCADE handles them, but we list them explicitly so a
@@ -937,7 +839,8 @@ async def main() -> None:
             # full `dev.sh --clean` volume wipe is the only thing that
             # resets those (see docs/security-guide.md).
             await conn.execute("""
-                TRUNCATE workflow_checkpoints, hitl_requests,
+                TRUNCATE sales_analysis_runs, inventory_movements, sales_dataset_runs, idempotency_keys, tool_approval_requests,
+                         workflow_checkpoints, hitl_requests,
                          agent_execution_steps, usage_logs, messages, conversations,
                          agent_permissions, access_requests, agent_catalog,
                          restock_schedule, shipping_rates, warehouse_inventory,
@@ -947,28 +850,32 @@ async def main() -> None:
                          promotions, coupons, loyalty_tiers,
                          carriers, warehouses, products, users,
                          oauth_clients
-                CASCADE
+                RESTART IDENTITY CASCADE
             """)
 
+        random.seed(config.seed)
         user_ids = await seed_users(conn)
         products = await seed_products(conn, user_ids)
         warehouse_ids = await seed_warehouses(conn)
-        await seed_warehouse_inventory(conn, warehouse_ids, products)
         carrier_ids = await seed_carriers(conn)
         await seed_shipping_rates(conn, carrier_ids)
         await seed_coupons(conn)
         await seed_promotions(conn)
         await seed_loyalty_tiers(conn)
-        await seed_orders(conn, user_ids, products)
+        customers = [user_ids[email] for email, _, _, role, _, _ in USERS if role == "customer"]
+        simulation = generate(products, warehouse_ids, customers, config)
+        summary = await write_simulation(conn, simulation)
+        logger.info("Sales simulation: %s", summary)
         await seed_reviews(conn, user_ids, products)
-        await seed_price_history(conn, products)
         await seed_restock_schedule(conn, warehouse_ids, products)
         await seed_agent_catalog(conn)
+        await ensure_manager(conn)
         await seed_oauth_clients(conn)
         await seed_agent_permissions(conn, user_ids)
         await seed_carts(conn, user_ids, products)
         await seed_workflow_checkpoints(conn)
         await seed_hitl_requests(conn, user_ids)
+        await validate_database(conn)
 
         # Collect planner statistics before anyone queries this data.
         #
@@ -987,10 +894,43 @@ async def main() -> None:
         await conn.execute("ANALYZE")
 
         logger.info("Seeding complete!")
+    return True
 
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--reset", action="store_true", help="Explicitly erase and rebuild business demo data")
+    parser.add_argument("--days", type=int, default=180)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--end-date", type=date.fromisoformat, default=None)
+    parser.add_argument("--check", action="store_true", help="Read-only validation of inventory and order totals")
+    parser.add_argument("--preview", action="store_true", help="Generate and validate in memory; never connect to DB")
+    args = parser.parse_args()
+    config = SimulationConfig(days=args.days, seed=args.seed, **({"end_date": args.end_date} if args.end_date else {}))
+    if args.preview:
+        from scripts.sales_data.validate import validate_simulation
+
+        products = [{**p, "id": product_id_for(p["name"])} for p in PRODUCTS]
+        warehouses = [uuid.uuid5(NAMESPACE, f"warehouse:{name}") for name, _, _ in WAREHOUSES]
+        customers = [uuid.uuid5(NAMESPACE, email) for email, _, _, role, _, _ in USERS if role == "customer"]
+        data = generate(products, warehouses, customers, config)
+        print(json.dumps({"start_date": str(config.start_date), "end_date": str(config.end_date),
+                          **validate_simulation(data)}, indent=2))
+        return
+    asyncio.run(run_database(args, config))
+
+
+async def run_database(args: argparse.Namespace, config: SimulationConfig) -> None:
+    logger.info("Connecting to database: %s", DATABASE_URL.split("@")[-1])
+    conn = await connect_with_retry(DATABASE_URL)
+    try:
+        if args.check:
+            logger.info("Validation: %s", await validate_database(conn))
+        else:
+            await seed_database(conn, config, reset=args.reset)
     finally:
         await conn.close()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

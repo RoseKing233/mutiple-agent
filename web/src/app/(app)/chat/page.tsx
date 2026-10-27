@@ -505,7 +505,24 @@ export default function ChatPage() {
     setIsResponding(true);
 
     const assistantId = crypto.randomUUID();
-    let assistantCreated = false;
+    // Tool, graph and text frames can arrive in one SSE read. React batches
+    // their updates, so a flag changed inside an updater is not visible to
+    // the next callback yet. Always upsert by the same turn ID using the
+    // pending state, and keep updater functions free of outside mutations.
+    function updateAssistant(update: (message: Message) => Message) {
+      setMessages((prev) => {
+        const existing = prev.find((m) => m.id === assistantId);
+        const base: Message = existing ?? {
+          id: assistantId,
+          role: "assistant",
+          content: "",
+          streaming: true,
+          mode: messageMode,
+        };
+        const next = update(base);
+        return existing ? prev.map((m) => m.id === assistantId ? next : m) : [...prev, next];
+      });
+    }
     // Set once the orchestrator's own final text (onChunk) starts arriving
     // for this turn. Before that, any content shown is a specialist's live
     // `delta` preview (onDeltaChunk) — the first real-text chunk *replaces*
@@ -533,27 +550,7 @@ export default function ChatPage() {
         (chunk) => {
           const isFirstFinalChunk = !receivedFinalText;
           receivedFinalText = true;
-          if (!assistantCreated) {
-            assistantCreated = true;
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: assistantId,
-                role: "assistant",
-                content: chunk,
-                streaming: true,
-                mode: messageMode,
-              },
-            ]);
-          } else {
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantId
-                  ? { ...m, content: isFirstFinalChunk ? chunk : m.content + chunk }
-                  : m,
-              ),
-            );
-          }
+          updateAssistant((m) => ({ ...m, content: isFirstFinalChunk ? chunk : m.content + chunk }));
         },
         controller.signal,
         {
@@ -565,25 +562,7 @@ export default function ChatPage() {
             // true. If it somehow did, dropping it is strictly safer than
             // re-appending a stale preview onto the real answer.
             if (receivedFinalText) return;
-            if (!assistantCreated) {
-              assistantCreated = true;
-              setMessages((prev) => [
-                ...prev,
-                {
-                  id: assistantId,
-                  role: "assistant",
-                  content: chunk,
-                  streaming: true,
-                  mode: messageMode,
-                },
-              ]);
-            } else {
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === assistantId ? { ...m, content: m.content + chunk } : m,
-                ),
-              );
-            }
+            updateAssistant((m) => ({ ...m, content: m.content + chunk }));
           },
           onStep: (step) => {
             // Update thinking label with the active agent
@@ -598,27 +577,7 @@ export default function ChatPage() {
             };
             setThinkingLabel(AGENT_LABELS[agent] ?? `${agent} is working...`);
 
-            setMessages((prev) => {
-              if (!prev.some((m) => m.id === assistantId)) {
-                assistantCreated = true;
-                return [
-                  ...prev,
-                  {
-                    id: assistantId,
-                    role: "assistant",
-                    content: "",
-                    streaming: true,
-                    steps: [step],
-                    mode: messageMode,
-                  },
-                ];
-              }
-              return prev.map((m) =>
-                m.id === assistantId
-                  ? { ...m, steps: [...(m.steps ?? []), step] }
-                  : m,
-              );
-            });
+            updateAssistant((m) => ({ ...m, steps: [...(m.steps ?? []), step] }));
           },
           onOrchestrationEvent: (eventName, data) => {
             if (eventName === "run") {
@@ -627,13 +586,7 @@ export default function ChatPage() {
                 pending_approval?: boolean;
               };
               if (!run_id) return;
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === assistantId
-                    ? { ...m, runId: run_id, pendingApproval: pending_approval === true }
-                    : m,
-                ),
-              );
+              updateAssistant((m) => ({ ...m, runId: run_id, pendingApproval: pending_approval === true }));
               return;
             }
             if (eventName !== "node" && eventName !== "error") return;
@@ -641,31 +594,18 @@ export default function ChatPage() {
             const nodeId = frame.node_id;
             if (!nodeId) return;
 
-            setMessages((prev) => {
-              const existing = prev.find((m) => m.id === assistantId);
-              const base: Message = existing ?? {
-                id: assistantId,
-                role: "assistant",
-                content: "",
-                streaming: true,
-                mode: messageMode,
-              };
-              if (!existing) assistantCreated = true;
-
-              let next: Message;
+            updateAssistant((base) => {
               if (eventName === "error") {
-                next = { ...base, errorNodeIds: [...(base.errorNodeIds ?? []), nodeId] };
-              } else if (frame.phase === "exit") {
-                next = {
+                return { ...base, errorNodeIds: [...(base.errorNodeIds ?? []), nodeId] };
+              }
+              if (frame.phase === "exit") {
+                return {
                   ...base,
                   activeNodeIds: (base.activeNodeIds ?? []).filter((id) => id !== nodeId),
                   doneNodeIds: [...(base.doneNodeIds ?? []), nodeId],
                 };
-              } else {
-                next = { ...base, activeNodeIds: [...(base.activeNodeIds ?? []), nodeId] };
               }
-
-              return existing ? prev.map((m) => (m.id === assistantId ? next : m)) : [...prev, next];
+              return { ...base, activeNodeIds: [...(base.activeNodeIds ?? []), nodeId] };
             });
           },
           onGrounding: (report) => {

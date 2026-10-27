@@ -9,6 +9,8 @@ import {
  * NEXT_PUBLIC_API_URL only to bypass that proxy and call an orchestrator
  * directly — it works, and it brings CORS back with it.
  */
+import type { ForecastParameters, ForecastRun, ManagerAnalysis, ManagerCatalog, ManagerOrders, ManagerProductList, PerformanceReport, SavedAnalysisList } from "./manager-types";
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 /**
@@ -711,6 +713,47 @@ class ApiClient {
 
   getSellerStats() {
     return this.request<any>("/api/seller/stats");
+  }
+
+  getManagerCatalog(signal?: AbortSignal) {
+    return this.request<ManagerCatalog>("/api/manager/catalog", { signal });
+  }
+
+  getManagerPerformance(query: string, signal?: AbortSignal) {
+    return this.request<PerformanceReport>(`/api/manager/performance?${query}`, { signal });
+  }
+
+  createAnalysisRun(parameters: ForecastParameters, requestId: string) {
+    return this.request<ForecastRun>("/api/manager/analysis-runs", {
+      method: "POST", body: JSON.stringify({ ...parameters, request_id: requestId }),
+    });
+  }
+
+  getAnalysisRuns(offset = 0, signal?: AbortSignal) {
+    return this.request<SavedAnalysisList>(`/api/manager/analysis-runs?offset=${offset}`, { signal });
+  }
+
+  getAnalysisRun(id: string, signal?: AbortSignal) {
+    return this.request<ForecastRun>(`/api/manager/analysis-runs/${encodeURIComponent(id)}`, { signal });
+  }
+
+  getManagerProducts(query: string, signal?: AbortSignal) {
+    return this.request<ManagerProductList>(`/api/manager/products?${query}`, { signal });
+  }
+
+  getManagerAnalysis(query: string, signal?: AbortSignal) {
+    return this.request<ManagerAnalysis>(`/api/manager/analysis?${query}`, { signal });
+  }
+
+  getManagerOrders(productId: string, query: string, signal?: AbortSignal) {
+    return this.request<ManagerOrders>(`/api/manager/products/${encodeURIComponent(productId)}/orders?${query}`, { signal });
+  }
+
+  /** Inventory management (/api/manager/inventory*, warehouses, products, suggestions). */
+  inventory<T>(path: string, method: "GET" | "POST" | "PATCH" | "DELETE" = "GET", body?: unknown, signal?: AbortSignal) {
+    return this.request<T>(`/api/manager${path}`, {
+      method, signal, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
   }
 
   // Products

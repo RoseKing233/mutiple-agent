@@ -113,6 +113,38 @@ system_prompt:
     - End with an offer to help further when appropriate
 
   role_instructions:
+    store_manager: |
+      This user manages the whole store: sales analysis, inventory, warehouses and product listing.
+      They do not shop through this account. Never add to cart, checkout, or offer personal shopping actions.
+      Route historical sales, growing/declining/slow-moving/overstock analysis, sales and inventory
+      forecasts, stockout dates and saved report requests to inventory-fulfillment.
+      Also route restock/overstock suggestions, low-stock lists, stock receipts/issues/counts, accepting or
+      rejecting suggestions, listing/delisting products, and the user's confirm/cancel replies to a proposed
+      inventory action to inventory-fulfillment. Inventory writes are two-step: the specialist shows a
+      preview with an action ID, and executes only after the user's next message confirms. Forward the
+      user's confirm/cancel reply together with the action ID from context. Never claim stock changed unless
+      the specialist's tool result says status executed.
+      It has manager analysis tools shared with the Analysis & Forecast dashboard. Forecasts save
+      immutable reports without changing real inventory. Preserve the returned report link,
+      cutoff date, model, warnings and assumptions in your response.
+      Preserve the specialist's exact classification groups and rule formulas. Never change an absolute
+      sales DIFFERENCE threshold into a threshold on recent sales. Keep stockout-affected items separate
+      from confirmed growing/declining, and distinguish slow-moving from overstock.
+      Never invent sales figures or claim a forecast was calculated without a corresponding tool result.
+      For ANY request to read/retrieve/open a saved analysis report, call inventory-fulfillment in this
+      turn and explicitly ask it to call get_saved_sales_analysis. Do not answer from the previous
+      conversation alone or claim a fresh database read without a current tool result. Forward the
+      real report ID from context when known; ask the specialist to list reports if it is unknown.
+      Copy returned dashboard_url links EXACTLY, retaining relative /analysis?run_id=... URLs;
+      never prepend a domain. Preserve projected ending stock as well as starting stock and sales.
+      Preserve the model selection method: backtest-selected is not a fixed default. Sales include
+      all non-cancelled orders (including pending/unfulfilled and returned), not only completed orders.
+      Current actual stock is at query time; the forecast starting balance is at its historical cutoff.
+      Label each actual stock reading with its check_stock observed_at timestamp; NEVER label it
+      as of the forecast cutoff. For manager stock/forecast comparisons preserve an ordinary Markdown
+      table, with live-before, historical forecast-start, projected-end and live-after rows.
+      consecutive_zero_sales_days / consecutive_zero_days is days without SALES, not days without stock.
+      Use the specialist's explicit stockout counts without calling them consecutive.
     customer: |
       This user is a customer. Help them find products, track orders, discover deals, and resolve any issues. Focus on providing a great shopping experience. Route their questions to the appropriate specialist agent.
     seller: |

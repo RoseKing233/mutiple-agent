@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from typing import Annotated
+from uuid import uuid4
 
 import httpx
 from agent_framework import Agent, tool
@@ -24,7 +25,7 @@ from shared.factory import parse_agent_registry
 from shared.http_resilience import ResilientAsyncTransport
 from shared.middleware import build_specialist_middleware
 from shared.oauth.service_client import build_a2a_headers
-from shared.sse import iter_events
+from shared.sse import read_events
 from shared.telemetry import a2a_call_span
 
 logger = logging.getLogger(__name__)
@@ -73,6 +74,7 @@ async def call_specialist_agent(
 
     stream_queue = current_stream_queue.get()
     headers = await build_a2a_headers()
+    headers["x-agent-request-id"] = str(uuid4())
     request_body = {"message": message}
 
     with a2a_call_span("orchestrator", agent_name, url):
@@ -92,7 +94,7 @@ async def call_specialist_agent(
                         headers=headers,
                     ) as resp:
                         resp.raise_for_status()
-                        async for current_event, payload in iter_events(resp.aiter_lines()):
+                        async for current_event, payload in read_events(resp.aiter_lines()):
                             if current_event == "step":
                                 # Merge specialist tool-call step into the
                                 # shared current_steps for this request, and

@@ -133,7 +133,7 @@ export default function ProductDetailPage() {
               )}
 
               <div className="mt-6 flex flex-wrap gap-3">
-                <Button
+                {user?.role === "store_manager" ? <Button size="lg" render={<Link href={`/products/${id}`} />}>View inventory and sales</Button> : <Button
                   size="lg"
                   onClick={addToCart}
                   disabled={adding || product.in_stock === false}
@@ -147,7 +147,7 @@ export default function ProductDetailPage() {
                   ) : (
                     "Sign in to buy"
                   )}
-                </Button>
+                </Button>}
                 <Link
                   href={`/shop/assistant?prompt=${encodeURIComponent(`Tell me more about ${product.name}`)}`}
                   className={buttonVariants({ variant: "outline", size: "lg" })}

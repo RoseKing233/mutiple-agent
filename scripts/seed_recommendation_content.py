@@ -20,11 +20,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "agents" / "python"))
 
 from shared.config import settings
+from shared.db_migrations import apply_migrations
 
 NAMESPACE = uuid.UUID("7f8d012c-6599-4cdd-8d75-940d60312426")
-MIGRATION = (
-    ROOT / "docker" / "postgres" / "migrations" / "005_recommendation_evidence.sql"
-)
 CONTENT = Path(__file__).parent / "data" / "recommendation_content.json"
 
 
@@ -58,7 +56,7 @@ async def seed_content(
     if not apply:
         return result
     async with conn.transaction():
-        await conn.execute(MIGRATION.read_text(encoding="utf-8"))
+        await apply_migrations(conn)
         reviewer_id = uuid.uuid5(NAMESPACE, "synthetic-reviewer")
         await conn.execute(
             """INSERT INTO users (id, email, name, password_hash, is_active)
