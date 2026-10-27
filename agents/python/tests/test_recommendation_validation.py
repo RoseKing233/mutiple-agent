@@ -147,6 +147,26 @@ def test_generation_schemas_do_not_leak_citations_between_products() -> None:
     first_format.model_validate(draft().model_dump())
 
 
+@pytest.mark.parametrize("budget_fit,stock", [(False, 10), (None, 0), (True, 0), (True, -1)])
+def test_known_budget_or_stock_mismatch_cannot_be_presented_as_a_match(budget_fit: bool | None, stock: int) -> None:
+    evidence = {**EVIDENCE, "product": {"available_quantity": stock}}
+    response_format = recommendation_response_format(evidence, budget_fit=budget_fit)
+    fields = draft().model_dump()
+    for status in ("meets_needs", "cannot_confirm"):
+        fields["needs_assessment"]["status"] = status
+        with pytest.raises(ValidationError):
+            response_format.model_validate(fields)
+    fields["needs_assessment"]["status"] = "does_not_meet"
+    response_format.model_validate(fields)
+
+
+def test_unknown_stock_is_not_treated_as_zero_stock() -> None:
+    response_format = recommendation_response_format({**EVIDENCE, "product": {"available_quantity": None}})
+    fields = draft().model_dump()
+    fields["needs_assessment"]["status"] = "cannot_confirm"
+    response_format.model_validate(fields)
+
+
 @pytest.mark.parametrize("mcp", [False, True])
 def test_tools_available_in_both_discovery_modes(monkeypatch: pytest.MonkeyPatch, mcp: bool) -> None:
     from product_discovery import agent as discovery

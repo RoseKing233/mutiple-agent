@@ -19,6 +19,12 @@ export function RecommendationPanel({ productId }: { productId: string }) {
   useEffect(() => () => pending.current?.abort(), []);
   const displayedEvidence = evidence ? presentRecommendationEvidence(evidence) : null;
 
+  function clearAssessment() {
+    setResult(null);
+    setEvidence(null);
+    setError("");
+  }
+
   async function load(generate: boolean) {
     if (generate && !preferences.trim()) {
       setError("Describe how you plan to use this product and what you need from it.");
@@ -62,17 +68,17 @@ export function RecommendationPanel({ productId }: { productId: string }) {
       <label className="block text-sm font-medium">
         Your needs and intended use
         <textarea className="mt-1 block min-h-20 w-full rounded-md border bg-background p-2 font-normal"
-          value={preferences} onChange={(event) => setPreferences(event.target.value)} maxLength={1500}
+          value={preferences} onChange={(event) => { setPreferences(event.target.value); clearAssessment(); }} maxLength={1500}
           placeholder="Example: I need it for daily commuting. It should be lightweight, durable and easy to carry." disabled={busy} />
       </label>
       <div className="flex flex-wrap gap-4">
         <label className="text-sm font-medium">Maximum budget (USD, optional)
           <input type="number" min="0" max="1000000" step="0.01" value={budget} disabled={busy}
-            onChange={(event) => setBudget(event.target.value)}
+            onChange={(event) => { setBudget(event.target.value); clearAssessment(); }}
             className="mt-1 block w-48 rounded-md border bg-background p-2 font-normal" />
         </label>
         <label className="text-sm font-medium">Response language
-          <select value={language} disabled={busy} onChange={(event) => setLanguage(event.target.value as "en" | "zh")}
+          <select value={language} disabled={busy} onChange={(event) => { setLanguage(event.target.value as "en" | "zh"); clearAssessment(); }}
             className="mt-1 block rounded-md border bg-background p-2 font-normal">
             <option value="en">English</option><option value="zh">中文</option>
           </select>

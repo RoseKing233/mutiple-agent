@@ -90,4 +90,48 @@ describe("recommendation panel", () => {
     view.unmount();
     expect(signal?.aborted).toBe(true);
   });
+
+  it.each([
+    ["Your needs and intended use", "I need a different colour"],
+    ["Maximum budget (USD, optional)", "1"],
+    ["Response language", "zh"],
+  ])("clears the previous assessment when %s changes", async (label, value) => {
+    vi.mocked(api.generateRecommendationReasons).mockResolvedValue({
+      ...evidence, product_id: "p1", product_name: "Bottle", preferences: "I want black", budget_fit: true,
+      needs_assessment: { status: "meets_needs", text: "Black is listed and fits your budget.", source_ids: ["review:1"] },
+      product_summary: [], review_summary: [], reasons: [], cautions: [], usage: { input_tokens: 10, output_tokens: 5 },
+    } as never);
+    render(<RecommendationPanel productId="p1" />);
+    fireEvent.change(screen.getByLabelText("Your needs and intended use"), { target: { value: "I want black" } });
+    fireEvent.click(screen.getByText("Assess this product for me"));
+    await screen.findByRole("region", { name: "Answer to your request" });
+    fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    expect(screen.queryByRole("region", { name: "Answer to your request" })).not.toBeInTheDocument();
+    expect(api.generateRecommendationReasons).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["-1", "1000001"])("rejects invalid budget %s without spending an AI request", async (value) => {
+    render(<RecommendationPanel productId="p1" />);
+    fireEvent.change(screen.getByLabelText("Your needs and intended use"), { target: { value: "commuting" } });
+    fireEvent.change(screen.getByLabelText("Maximum budget (USD, optional)"), { target: { value } });
+    fireEvent.click(screen.getByText("Assess this product for me"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Enter a budget between");
+    expect(api.generateRecommendationReasons).not.toHaveBeenCalled();
+  });
+
+  it("allows retry after a failure and prevents duplicate requests while waiting", async () => {
+    vi.mocked(api.generateRecommendationReasons)
+      .mockRejectedValueOnce(new Error("AI recommendation is unavailable."))
+      .mockReturnValueOnce(new Promise(() => {}));
+    render(<RecommendationPanel productId="p1" />);
+    fireEvent.change(screen.getByLabelText("Your needs and intended use"), { target: { value: "commute" } });
+    const submit = screen.getByText("Assess this product for me");
+    fireEvent.click(submit);
+    await screen.findByRole("alert");
+    fireEvent.click(submit);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(submit).toBeDisabled();
+    fireEvent.click(submit);
+    expect(api.generateRecommendationReasons).toHaveBeenCalledTimes(2);
+  });
 });

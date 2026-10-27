@@ -58,7 +58,9 @@ class RecommendationDraft(BaseModel):
     cautions: list[CitedPoint] = Field(max_length=5)
 
 
-def recommendation_response_format(evidence: dict[str, Any]) -> type[RecommendationDraft]:
+def recommendation_response_format(
+    evidence: dict[str, Any], *, budget_fit: bool | None = None
+) -> type[RecommendationDraft]:
     """Constrain generated citations to this request's evidence and section kinds.
 
     Free-form UUID strings can be mistyped even in an otherwise correct answer.
@@ -80,6 +82,10 @@ def recommendation_response_format(evidence: dict[str, Any]) -> type[Recommendat
     all_kinds = {"catalogue", "document", "review"}
     point = cited_type("EvidencePoint", CitedPoint, all_kinds)
     assessment = cited_type("EvidenceAssessment", NeedsAssessment, all_kinds)
+    stock = evidence.get("product", {}).get("available_quantity")
+    if budget_fit is False or (stock is not None and stock <= 0):
+        # These are known constraints, not judgements left to the model.
+        assessment = create_model("UnavailableAssessment", __base__=assessment, status=(Literal["does_not_meet"], ...))
     product_point = cited_type("ProductEvidencePoint", CitedPoint, {"catalogue", "document"})
     has_reviews = any(source["kind"] == "review" for source in sources)
     review_point = cited_type("ReviewEvidencePoint", CitedPoint, {"review"}) if has_reviews else CitedPoint
@@ -191,6 +197,9 @@ async def get_recommendation_evidence(product_id: str | UUID) -> dict[str, Any]:
                     "title": f"{product['name']} demo catalogue options",
                     "text": "Synthetic demo catalogue options (not verified manufacturer offerings).\n"
                     + "\n".join(f"{key.replace('_', ' ').capitalize()}: {value}" for key, value in attributes.items())
+                    + "\nOption structure: independent attribute lists, not purchasable variants. "
+                    "Colour/size combinations: not recorded. A listed colour and listed size "
+                    "do not establish that their combination exists."
                     + "\nThese are listed options, not colour/size stock records. "
                     "Stock totals do not establish availability of a particular colour or size.",
                     "origin": str(demo_options.get("source", "Synthetic classroom catalogue options")),
@@ -282,7 +291,7 @@ async def generate_recommendation(
     tokens_in = tokens_out = 0
     status = "error"
     try:
-        response_format = recommendation_response_format(evidence)
+        response_format = recommendation_response_format(evidence, budget_fit=budget_fit)
         async with Agent(
             client=get_chat_client(),
             name="recommendation-reasons",

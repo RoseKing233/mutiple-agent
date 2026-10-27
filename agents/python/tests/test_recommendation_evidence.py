@@ -249,6 +249,8 @@ async def test_red_demo_option_is_citable_separately_from_original_catalogue(cat
     assert options_source["kind"] == "catalogue"
     assert "Red" in options_source["text"]
     assert "not colour/size stock records" in options_source["text"]
+    assert "independent attribute lists" in options_source["text"]
+    assert "Colour/size combinations: not recorded" in options_source["text"]
     catalogue_source = next(s for s in evidence["sources"] if s["id"] == f"product:{PID}")
     assert "Red" not in catalogue_source["text"]
     assert "demo_options" not in catalogue_source["text"]
