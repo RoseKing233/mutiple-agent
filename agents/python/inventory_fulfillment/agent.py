@@ -23,6 +23,7 @@ from shared.config import settings
 from shared.context_providers import ECommerceContextProvider
 from shared.middleware import build_specialist_middleware
 from shared.oauth.service_client import acquire_service_token, build_mcp_http_client, set_mcp_auth_header
+from shared.tools.inventory_management_tools import INVENTORY_MANAGEMENT_TOOLS
 from shared.tools.inventory_tools import check_stock, get_warehouse_availability
 from shared.tools.product_lookup_tools import find_product_by_name
 from shared.tools.sales_analysis_tools import SALES_ANALYSIS_TOOLS
@@ -40,6 +41,7 @@ AGENT_TOOLS = [
     place_backorder,
     get_user_profile,
     *SALES_ANALYSIS_TOOLS,
+    *INVENTORY_MANAGEMENT_TOOLS,
 ]
 
 # Set once by create_inventory_fulfillment_agent() when MCP_ENABLED+MCP_AUTH_ENABLED;
@@ -75,6 +77,7 @@ def create_inventory_fulfillment_agent() -> Agent:
             place_backorder,
             get_user_profile,
             *SALES_ANALYSIS_TOOLS,
+            *INVENTORY_MANAGEMENT_TOOLS,
         ]
     else:
         tools = AGENT_TOOLS  # type: ignore[assignment]

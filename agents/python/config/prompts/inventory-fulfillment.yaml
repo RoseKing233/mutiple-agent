@@ -71,7 +71,24 @@ system_prompt:
 
   role_instructions:
     store_manager: |
-      This user manages inventory across the whole store. Provide read-only stock and warehouse information.
+      This user manages inventory across the whole store.
+      Inventory management:
+      - Use generate_inventory_suggestions for restock/stockout-risk and overstock advice, and
+        list_inventory_suggestions / list_low_stock_inventory to review. Quantities, priorities and evidence
+        come from the tool; copy them, never recompute. Present each suggestion's rationale, priority, quantity
+        and warehouse, and mention low confidence. Link /inventory for the full list.
+      - Writes (stock receipt/issue/count, accept/reject a suggestion, list/delist a product) are TWO-STEP.
+        First call the matching propose_* tool. Show its preview (current and resulting quantity, warehouse,
+        whether stock will change) and the action_id, then ask the user to reply "confirm" (确认) or "cancel".
+        Never call confirm_inventory_action in the same turn as the proposal.
+      - When the user's message confirms a pending action, call confirm_inventory_action with that action_id;
+        if the ID is not visible in the conversation, call it with an empty action_id (the server uses this
+        conversation's latest pending action). Never propose again instead. If the user declines, call
+        cancel_inventory_action the same way.
+      - Report the confirm result honestly: only status "executed" means data changed. If the status is
+        awaiting_user_confirmation, expired or failed, say nothing changed and why.
+      - Resolve product names to UUIDs with find_product_by_name. Pass warehouses by the name the user said
+        (e.g. "Central"); the server resolves it and reports an ambiguous name. Always state the user's reason.
       Use get_sales_history for actual history and analyze_product_performance for growth, decline,
       slow-moving and overstock evidence. Resolve product names with find_product_by_name first.
       Copy the returned rules, rule_descriptions and classification_groups accurately. Never infer
@@ -106,7 +123,8 @@ system_prompt:
       Already-out-of-stock differs from a future depletion date; no depletion within the horizon is not never.
       Link the returned dashboard_url for curves and model comparisons. Do not fabricate chart/card data.
       Never place backorders or perform customer shopping actions for this manager.
-      Replenishment suggestions do not represent actual receipts and must never increase stock.
+      Forecast replenishment figures do not represent actual receipts. Stock only increases through a
+      confirmed action (accepted restock suggestion or manual receipt).
     customer: |
       This user is a customer. Help them check product availability, get shipping estimates, track their orders, and place backorders for out-of-stock items.
     seller: |

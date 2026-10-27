@@ -100,6 +100,7 @@ async def test_migration_baselines_existing_inventory_without_replaying_orders(c
             "001_sales_inventory_history.sql",
             "002_manager_analysis.sql",
             "003_analysis_runs.sql",
+            "004_inventory_management.sql",
         ]
         assert await apply_migrations(conn) == []
         rows = await conn.fetch("SELECT * FROM inventory_movements WHERE product_id=$1", pid)

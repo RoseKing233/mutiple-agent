@@ -39,6 +39,8 @@
 角色通过 JWT 和现有 Agent 身份传递机制传递；经理不是 admin，也不拥有审批、退款或库存编辑权限。
 本轮没有更改其他组员负责的在线退货、取消回补、库存 CRUD 和补货建议执行逻辑。
 
+> **2026-10-27 更新（Xinyu，库存管理模块）**：store_manager 现在有库存、仓库、商品（含上下架）的写权限，补货/积压建议在经理确认后可以执行。详见 `docs/inventory-management/README.md`。本文其余内容不变。
+
 ## 组员使用指南：启动、网页和 Chat
 
 ### 启动与退出
@@ -744,6 +746,7 @@ docker compose --profile seed run --rm --no-deps seeder uv run --no-project pyth
 - 销售件数不等于订单笔数；商品明细金额不等于扣除优惠和退款后的净收入。
 - `restock_schedule` 保留模板计划信息以兼容旧工具，不自动入库，默认库存预测也不计入。
 - 补货建议只保存建议，查看、保存、接受建议都不调用库存写入函数。
+  （2026-10-27 起由库存管理模块调整：经理**接受**补货建议时，会通过 `change_inventory` 记一笔 `restock_receipt`；生成、查看、拒绝建议仍然不改库存。预测本身依旧不计入未来入库。）
 
 ### 测试
 
@@ -870,7 +873,9 @@ async with conn.transaction():
 | 收到且可再次销售 | 记 return_received，回补实际接收数量 |
 | 取消此前已扣库的订单 | 记 cancel_release，最多释放一次 |
 | 人工调整实际库存 | 记录差值和原因，不能只 UPDATE quantity |
-| 生成/保存/接受补货建议 | 不调用库存写入函数 |
+| 生成/保存/拒绝补货建议 | 不调用库存写入函数 |
+| 接受补货建议（2026-10-27 新增） | 记 `restock_receipt`，event_key 为 `suggestion:<建议 ID>`，只执行一次 |
+| 手工入库/出库/盘点（2026-10-27 新增） | 记 `manual_receipt` / `manual_issue` / `stock_count_adjustment`，必须填原因 |
 
 取消可以通过订单 sale 流水确定实际扣减仓库，不要一律补到默认仓库。
 如果以后支持分批验收，事件键还应包含验收批次标识，区分合法的不同批次与重复请求。

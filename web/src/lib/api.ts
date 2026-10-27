@@ -745,6 +745,13 @@ class ApiClient {
     return this.request<ManagerOrders>(`/api/manager/products/${encodeURIComponent(productId)}/orders?${query}`, { signal });
   }
 
+  /** Inventory management (/api/manager/inventory*, warehouses, products, suggestions). */
+  inventory<T>(path: string, method: "GET" | "POST" | "PATCH" | "DELETE" = "GET", body?: unknown, signal?: AbortSignal) {
+    return this.request<T>(`/api/manager${path}`, {
+      method, signal, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  }
+
   // Products
   getProducts(params?: { category?: string; min_price?: number; max_price?: number; search?: string; sort?: string }) {
     const qs = new URLSearchParams();
