@@ -99,6 +99,16 @@
 
 ## 6. 给后面同学的接入说明
 
+> **⚠ 迁移编号约定（所有人）**：`docker/postgres/migrations/` 下已经用掉 001–005：
+> - 001–003：Jingtong，销量分析
+> - 004：本模块，`004_inventory_management.sql`
+> - 005：营销辅助，`005_marketing_assist.sql`
+>
+> **新迁移请从 `006_` 开始编号**，文件名要写清楚用途，例如 `006_order_cancellation.sql`。如果有两个人同时在不同分支上加迁移，请先在组里约好各自用哪个号，不然合并时会撞号，或者执行顺序出错。
+>
+> - 已经执行过的迁移文件**不能修改**：迁移器会校验文件内容，改了就报 "Applied migration changed"。要改表结构，请新建一个迁移。
+> - 迁移测试 `test_sales_data.py::test_migration_baselines_...` 现在直接和磁盘上的迁移文件比较，新增迁移不需要再改这个测试。
+
 - **Siqi（周四，取消/退款/退货）**：库存回补请继续用 `change_inventory`，类型是 `cancel_release` / `return_received`，跟本模块的类型不冲突。如果在 Chat 里做退款类写操作，也可以复用 `shared/inventory_actions.py` 的两步确认思路：服务端核对用户最新消息。原项目的 `shared/hitl.py` 是**管理员**审批队列，是另一种机制。
 - **Zihan（周五，前端）**：`/inventory` 页面的样式很简单，可以直接重写。接口都走 `api.inventory(path, method, body)`。注意 422 时 FastAPI 的 `detail` 可能是数组，现有 `api.request` 会显示成 `[object Object]`，统一前端时建议处理一下。
 - **Zicong（周三）**：通过本模块 `POST /products` 新增的商品**没有写 `product_embeddings`**，所以语义搜索搜不到新商品，普通关键词搜索可以搜到。如果你做数据填充，可以在这里补上 embedding。
