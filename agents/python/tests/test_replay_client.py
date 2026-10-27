@@ -149,6 +149,32 @@ async def test_streaming_response_supports_get_final_response(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_recording_isolates_provider_tool_schema_mutation(tmp_path: Path) -> None:
+    @tool(name="lookup", description="Read a catalogue item")
+    async def lookup(product_id: str) -> str:
+        return product_id
+
+    class MutatingTransport(_StubRecordClient):
+        async def _inner_get_response(self, *, messages: Any, stream: bool, options: dict[str, Any]) -> ChatResponse:
+            options["tools"][0].to_json_schema_spec()["function"]["parameters"]["additionalProperties"] = False
+            return await super()._inner_get_response(messages=messages, stream=stream, options=options)
+
+    recorder = ReplayChatClient(fixtures_dir=tmp_path, record=True)
+    recorder._record_client = MutatingTransport(_text_response("first"), _text_response("second"))
+    replayer = ReplayChatClient(fixtures_dir=tmp_path, record=False)
+    options = {"tools": [lookup]}
+    for prompt in ("first turn", "second turn"):
+        messages = [Message(role="user", contents=[prompt])]
+        expected = _request_hash(_canonical_request(messages, options))
+        recorded = await recorder._inner_get_response(messages=messages, stream=False, options=options)
+        assert _request_hash(_canonical_request(messages, options)) == expected
+        saved = json.loads((tmp_path / f"{expected}.json").read_text())
+        assert _request_hash(saved["request"]) == expected
+        replayed = await replayer._inner_get_response(messages=messages, stream=False, options=options)
+        assert replayed.text == recorded.text
+
+
+@pytest.mark.asyncio
 async def test_agent_replays_a_tool_calling_loop(tmp_path) -> None:
     """Two recorded turns: a function_call, then the final text answer.
 

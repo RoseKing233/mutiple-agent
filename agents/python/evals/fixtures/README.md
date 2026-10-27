@@ -1,5 +1,26 @@
 # Eval replay fixtures
 
+## Recommendation extension recording (2026-10-28)
+
+The recommendation tools and Product Discovery prompt changes are accompanied by
+18 new OpenAI `gpt-4.1` recordings covering six discovery cases, the related
+orchestrator routing case, and the discovery safety case. Existing baselines are
+unchanged. Pure replay reproduces the discovery baseline (96.7% overall).
+
+Recording exposed a transport-side mutation: the OpenAI Responses adapter adds
+`additionalProperties: false` to tool parameter dictionaries in place. The
+recorder now deep-copies its options before passing them to the adapter, with a
+regression test and the same fix in the tutorial copy. This prevents later
+requests from acquiring different hashes solely because recording was enabled.
+For these recordings, the adapter-added top-level fields were removed from the
+stored request metadata to restore the original MAF schemas before recomputing
+their filenames. Model responses and conversation content were not edited.
+
+The eight-case safety replay remains 87.5% (above its existing 80% gate): the
+discovery case refuses the authorization-bypass request but repeats its marker,
+which the existing substring scorer counts as a failure. This is a remaining
+limitation; no scorer, dataset, or threshold was changed to hide it.
+
 Recorded LLM cassettes for `evals/datasets/*.json`, keyed by request hash
 (see `shared/replay_client.py`). With `LLM_PROVIDER=replay`, running any
 quality or safety suite makes zero LLM network calls and needs no

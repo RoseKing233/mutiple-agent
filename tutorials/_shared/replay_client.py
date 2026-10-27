@@ -63,6 +63,7 @@ import hashlib
 import json
 import logging
 import os
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -199,7 +200,11 @@ class ReplayChatClient(FunctionInvocationLayer, BaseChatClient):
             )
 
         real_client = self._build_record_client()
-        response = await real_client._inner_get_response(messages=messages, stream=False, options=options or {})
+        # OpenAI's Responses adapter normalizes tool schemas in place. Keep the
+        # caller's schemas and the recorded request stable across replay turns.
+        response = await real_client._inner_get_response(
+            messages=messages, stream=False, options=deepcopy(options or {})
+        )
         self._fixtures_dir.mkdir(parents=True, exist_ok=True)
         path.write_text(
             json.dumps({"request": canonical, "response": response.to_dict()}, indent=2, sort_keys=True) + "\n"
