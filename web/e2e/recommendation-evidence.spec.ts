@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 
 // Real frontend + Python API + seeded Postgres. No LLM call or API mock.
-// Run the base seed on a NEW demo database, then seed_recommendation_content.py.
+// Run the base seed on a NEW database, then the recommendation and catalogue-options importers.
 test.describe("recommendation evidence", () => {
   test.skip(process.env.BACKEND_STACK === "dotnet", "This feature currently targets the Python stack.");
 
@@ -26,6 +26,10 @@ test.describe("recommendation evidence", () => {
         if (req.url().includes("/recommendation-reasons")) paidRequests.push(req.url());
       });
       await page.goto(`/shop/products/${product.id}`);
+      const options = page.getByRole("region", { name: "Demo catalogue options" });
+      await expect(options).toContainText("Black, Silver, Blue");
+      await expect(options).toContainText("not verified manufacturer offerings");
+      await expect(options).toContainText("Availability of a specific colour or size is not recorded");
       const panel = page.getByRole("region", { name: "Product suitability assessment" });
       await expect(panel.getByRole("heading", { name: "Is this product right for me?" })).toBeVisible();
       await panel.getByRole("button", { name: "View product info & reviews" }).click();

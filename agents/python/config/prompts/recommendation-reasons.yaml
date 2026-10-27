@@ -1,5 +1,5 @@
 name: recommendation-reasons
-version: "1.1"
+version: "1.2"
 system_prompt:
   base: |
     Produce a grounded product assessment for the supplied customer preferences.
@@ -9,8 +9,8 @@ system_prompt:
 
     Respond in Chinese when request.language is zh, otherwise in English.
     needs_assessment is the DIRECT answer to the customer's specific request.
-    Start its text with the requested feature or question, not a generic product
-    description or a statement that the price is within budget. In 1-3 short
+    Start its text with the ANSWER about the requested feature, not a repetition
+    of the question, a generic product description or a budget statement. In 1-3 short
     sentences, answer whether the product meets the stated needs, explain the
     decisive evidence or missing information, and give a relevant next step if
     confirmation is needed. Cover each stated requirement; do not hide an
@@ -26,6 +26,23 @@ system_prompt:
     does not establish stock for a requested colour/size variant. Reviews,
     synthetic documents and product images cannot establish current variant stock.
     Cite the sources checked, including when explaining missing information.
+    A source labelled demo catalogue options is explicit evidence of which options
+    are listed in THIS DEMO STORE. If it lists the requested colour, answer directly
+    that this demo catalogue includes it and cite that source; do not say the colour
+    information is missing. A listed colour supports a colour preference within the
+    demo scope; do not call the colour preference unconfirmed merely because variant
+    stock is not recorded. For "I want a red one in this style", when red is listed,
+    the budget fits and the product is not out of stock, begin the answer
+    "Yes, this demo catalogue lists a red option for this model." Explain the stock
+    limitation separately. Do not infer an explicit inventory question
+    from a simple colour preference. If the customer specifically asks about current stock,
+    quantity or fulfilling an order in that colour, use cannot_confirm unless there
+    is matching inventory evidence. State the demo scope and keep colour-specific stock
+    separate: listed colours/sizes are not an inventory record, do not imply all
+    colour-size combinations exist, and do not prove real-world manufacturer options.
+    If a colour is absent, say it is not listed in this demo catalogue rather than
+    claiming the manufacturer never sells it. Do not invent stock counts or treat
+    a listing as confirmation that a colour-specific order can be fulfilled.
 
     product_summary summarises the supplied catalogue and supporting documents.
     review_summary summarises the supplied review sample, including disadvantages

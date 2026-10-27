@@ -11,6 +11,7 @@
 | 引用 | 每个观点带来源 ID；接口拒绝不存在的引用和来源类型错误的摘要 |
 | 资料不足 | 显示缺少文档、没有评价、样本较少、库存未知或缺货等提示 |
 | 数据填充 | 50 件原始演示商品的介绍，以及其中 8 件商品的购买参考和 16 条模拟评价 |
+| 演示选项 | 50 件商品的补充属性：39 件的颜色、11 件的尺码、10 本书的语言，以及电路板外观说明；与原规格分开标记来源 |
 | 页面 | 商品详情中的 **Is this product right for me?**，支持需求、预算、英文/中文输出及来源展开 |
 | Agent 集成 | Product Discovery 增加读取依据和生成理由两个 MAF 工具；直接调用和 MCP 模式均注册 |
 | 费用记录 | 返回 input/output token 数，并记录 `usage_logs`；浏览商品或查看资料不会触发 AI 生成 |
@@ -117,6 +118,21 @@ LLM_MODEL=gpt-4.1
 
 返回值另含必填的 `needs_assessment`（`status`、`text`、`source_ids`），在界面 **Does it meet your needs?** 中优先展示。`status` 为 `meets_needs`、`does_not_meet` 或 `cannot_confirm`。提示词要求直接回答用户的具体需求；例如资料没有颜色时，应先说“无法确认红色款”，不能推断红色缺货，也不能用预算符合代替颜色符合。总库存不是颜色/尺码版本的库存证据。状态属于模型对资料的判断，引用校验只验证来源，不能证明判断语义正确。
 
+### 补充演示颜色和尺码
+
+```powershell
+# 预览，默认不写入数据库
+.\agents\python\.venv\Scripts\python.exe scripts\seed_catalogue_options.py
+# 备份后写入缺失的演示选项
+.\agents\python\.venv\Scripts\python.exe scripts\seed_catalogue_options.py --apply
+```
+
+选项定义在 `scripts/data/catalogue_options.json`，写入 `products.specs.demo_options`，带 `is_synthetic` 和来源说明，不覆盖原有技术规格、价格、描述、评价或库存。若商品已有对应颜色/尺码字段或已有 `demo_options`，导入保留已有值。重复执行不会重复插入或覆盖后来修改的选项。备份保存于 `.claude/recommendation-checks/catalogue-options-backup-*.json`，含每个修改商品的 ID、原规格和新规格。
+
+商品详情接口和 Product Discovery 的详情工具原本就返回 `specs`，因此能直接读取新选项。公开和登录后的商品页均展示 **Demo catalogue options**。推荐依据将演示选项单独列为 `demo-options:{product_id}` 来源，避免把它混入原商品资料或当作厂商验证信息。
+
+例如 Hydro Flask 的演示颜色是 Red、Black、White、Blue。用户问红色时应回答“演示目录列有红色”；问紫色时应回答“演示目录未列紫色”。这不代表品牌真实销售范围。库存和购物车目前仍按商品管理，未实现颜色/尺码 SKU、组合库存或颜色选择下单，因此不能从总库存推断红色款数量。要演示精确颜色库存和履约，需要另行扩展库存与订单模型。
+
 不存在/已下架商品返回 404；参数错误返回 422；缺 key、模型失败、超时、无效引用或数据库不可用返回 503，不用虚构文本补结果。生成请求沿用聊天限流。客户端使用已有同源 `/api` 代理，API key 始终保留在 Python 服务端。
 
 内部工具名称为 `get_recommendation_evidence` 和 `generate_recommendation_reasons`。单商品详细解释会额外启动一次受 45 秒超时约束的 MAF 调用；SDK 底层可能重试。多商品推荐提示词要求读取各商品依据后直接组织答案，减少重复生成。
@@ -138,7 +154,7 @@ pnpm build
 # 前后端启动且数据库已填充时，验证电脑和手机页面；不会调用模型。
 pnpm exec playwright test e2e/recommendation-evidence.spec.ts
 
-# 只在手动验收时运行：这一条会产生一次真实生成请求并消耗额度。
+# 只在手动验收时运行：当前包含三次真实生成请求，会消耗额度。
 $env:RUN_LIVE_RECOMMENDATION = 'true'
 pnpm exec playwright test e2e/recommendation-live.spec.ts
 Remove-Item Env:RUN_LIVE_RECOMMENDATION

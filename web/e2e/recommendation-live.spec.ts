@@ -49,8 +49,8 @@ test("live Chinese recommendation respects a low budget and opens cited sources"
   await expect(sources).toHaveAttribute("open", "");
 });
 
-// Regression for a specific colour request buried below a generic budget match.
-test("live red bottle request answers unknown colour before product summaries", async ({ page, request }) => {
+// Run seed_catalogue_options.py --apply before testing the demo colour listing.
+test("live red bottle request confirms the listed demo colour before summaries", async ({ page, request }) => {
   test.skip(process.env.RUN_LIVE_RECOMMENDATION !== "true", "Set RUN_LIVE_RECOMMENDATION=true for one paid test.");
   test.skip(process.env.BACKEND_STACK === "dotnet", "Python implementation only.");
   test.setTimeout(90000);
@@ -62,8 +62,7 @@ test("live red bottle request answers unknown colour before product summaries", 
   const evidenceResponse = await request.get(`/api/products/${product.id}/recommendation-evidence`);
   expect(evidenceResponse.ok()).toBe(true);
   const evidence = await evidenceResponse.json();
-  // This case applies to the classroom catalogue, which has no colour/variant data.
-  expect(Object.keys(evidence.product.specs).some((key) => /colou?r|variant/i.test(key))).toBe(false);
+  expect(evidence.product.specs.demo_options.attributes.colours).toContain("Red");
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(`/shop/products/${product.id}`);
   const panel = page.getByRole("region", { name: "Product suitability assessment" });
@@ -76,28 +75,54 @@ test("live red bottle request answers unknown colour before product summaries", 
   expect(generatedResponse.status()).toBe(200);
   const result = await generatedResponse.json();
   expect(result.budget_fit).toBe(true);
-  expect(result.needs_assessment.status).toBe("cannot_confirm");
+  // A colour listing is confirmed; the overall fit may still flag the lack of
+  // colour-specific order fulfilment. Assert the actual answer and its provenance.
+  expect(["meets_needs", "cannot_confirm"]).toContain(result.needs_assessment.status);
   expect(result.needs_assessment.text.split(/[.!?]/)[0]).toMatch(/red/i);
-  expect(result.needs_assessment.text).toMatch(/cannot|can't|not specified|not specify|not provided|no (?:colou?r|information)/i);
+  expect(result.needs_assessment.text).toMatch(/^Yes[, ]/i);
+  expect(result.needs_assessment.text).toMatch(/demo/i);
+  expect(result.needs_assessment.source_ids).toContain(`demo-options:${product.id}`);
   const known = new Set(result.sources.map((source: { id: string }) => source.id));
   expect(result.needs_assessment.source_ids.length).toBeGreaterThan(0);
   for (const id of result.needs_assessment.source_ids) expect(known.has(id)).toBe(true);
   const answer = panel.getByRole("region", { name: "Answer to your request" });
   await expect(answer).toContainText(result.needs_assessment.text);
-  await expect(answer).toContainText("Cannot confirm from the available information");
+  await expect(page.getByRole("region", { name: "Demo catalogue options" })).toContainText("Red, Black, White, Blue");
   const answerBox = await answer.boundingBox();
   const summaryBox = await panel.getByRole("heading", { name: "Product and document summary" }).boundingBox();
   expect(answerBox!.y + answerBox!.height).toBeLessThan(summaryBox!.y);
   await expect(panel.getByRole("alert")).toHaveCount(0);
   await mkdir("../.claude/recommendation-checks", { recursive: true });
-  await writeFile("../.claude/recommendation-checks/live-red-bottle.json", JSON.stringify(result, null, 2));
+  await writeFile("../.claude/recommendation-checks/live-red-bottle-with-options.json", JSON.stringify(result, null, 2));
   console.log("Direct answer:", result.needs_assessment, "Usage:", result.usage);
-  await panel.getByRole("heading", { name: "Is this product right for me?" }).scrollIntoViewIfNeeded();
-  await page.screenshot({ path: "../.claude/recommendation-checks/red-bottle-direct-answer.png", style: "header { visibility: hidden; }" });
+  await panel.screenshot({ path: "../.claude/recommendation-checks/red-bottle-with-options.png", style: "header { visibility: hidden; }" });
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(answer).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await answer.screenshot({ path: "../.claude/recommendation-checks/red-bottle-direct-answer-mobile.png" });
+  await answer.screenshot({ path: "../.claude/recommendation-checks/red-bottle-with-options-mobile.png" });
   await answer.getByRole("link").first().click();
   await expect(panel.locator("details")).toHaveAttribute("open", "");
+});
+
+test("live colour stock question does not invent a variant quantity", async ({ request }) => {
+  test.skip(process.env.RUN_LIVE_RECOMMENDATION !== "true", "Set RUN_LIVE_RECOMMENDATION=true for one paid test.");
+  test.skip(process.env.BACKEND_STACK === "dotnet", "Python implementation only.");
+  test.setTimeout(90000);
+  const response = await request.get("/api/products?search=Hydro%20Flask");
+  const { products } = await response.json();
+  const product = products.find((item: { name: string }) => item.name === "Hydro Flask 32oz Wide Mouth");
+  expect(product).toBeDefined();
+  const generated = await request.post(`/api/products/${product.id}/recommendation-reasons`, {
+    data: { preferences: "How many RED bottles are in stock right now? Can you guarantee a red one is available to order?", max_budget: 50, language: "en" },
+    timeout: 60000,
+  });
+  expect(generated.status()).toBe(200);
+  const result = await generated.json();
+  expect(result.needs_assessment.status).toBe("cannot_confirm");
+  expect(result.needs_assessment.text).toMatch(/red/i);
+  expect(result.needs_assessment.text).toMatch(/cannot|can't|not (?:recorded|tracked|confirm)|no .*stock/i);
+  expect(result.needs_assessment.source_ids).toContain(`demo-options:${product.id}`);
+  await mkdir("../.claude/recommendation-checks", { recursive: true });
+  await writeFile("../.claude/recommendation-checks/live-colour-stock.json", JSON.stringify(result, null, 2));
+  console.log("Colour stock answer:", result.needs_assessment, "Usage:", result.usage);
 });

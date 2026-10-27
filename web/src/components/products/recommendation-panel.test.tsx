@@ -63,7 +63,8 @@ describe("recommendation panel", () => {
     fireEvent.change(screen.getByLabelText("Your needs and intended use"), { target: { value: "I want red" } });
     fireEvent.click(screen.getByText("Assess this product for me"));
     const answer = await screen.findByRole("region", { name: "Answer to your request" });
-    expect(answer).toHaveTextContent("Cannot confirm from the available information");
+    const status = within(answer).getByText("Some details still need confirmation — see the explanation above.");
+    expect(within(answer).getByText(/A red version cannot be confirmed/).compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(answer).toHaveTextContent("A red version cannot be confirmed");
     expect(answer.compareDocumentPosition(screen.getByRole("heading", { name: "Product and document summary" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(answer.compareDocumentPosition(screen.getByText("Synthetic reviews are not real customer feedback.")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();

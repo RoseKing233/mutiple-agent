@@ -84,17 +84,17 @@ export function RecommendationPanel({ productId }: { productId: string }) {
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       {result && <section aria-label="Answer to your request" aria-live="polite" className="space-y-2 rounded-lg border border-primary/40 bg-primary/5 p-4">
         <h3 className="font-semibold">Does it meet your needs?</h3>
-        <p className="text-sm font-medium">{{
-          meets_needs: "Supported by the available evidence",
-          does_not_meet: "Does not meet all your requirements",
-          cannot_confirm: "Cannot confirm from the available information",
-        }[result.needs_assessment.status]}</p>
         <p className="text-sm">{result.needs_assessment.text}{" "}
           {result.needs_assessment.source_ids.map((id) => <a key={id} href={`#${productId}-${id}`} className="mr-1 text-primary underline"
             onClick={() => { if (sourceDetails.current) sourceDetails.current.open = true; }}>
             [{result.sources.findIndex((source) => source.id === id) + 1}]
           </a>)}
         </p>
+        <p className="text-sm font-medium">{{
+          meets_needs: "Supported by the available evidence",
+          does_not_meet: "Does not meet all your requirements",
+          cannot_confirm: "Some details still need confirmation — see the explanation above.",
+        }[result.needs_assessment.status]}</p>
       </section>}
       {evidence && <>
         <ul className="space-y-1 text-sm text-muted-foreground">

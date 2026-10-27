@@ -11,6 +11,7 @@ import { productImageUrl } from "@/lib/images";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RecommendationPanel } from "@/components/products/recommendation-panel";
+import { ProductOptions } from "@/components/products/product-options";
 
 interface ProductDetail {
   id: string;
@@ -24,6 +25,7 @@ interface ProductDetail {
   rating?: number | null;
   review_count?: number | null;
   in_stock?: boolean;
+  specs?: Record<string, unknown>;
 }
 
 export default function ProductDetailPage() {
@@ -164,7 +166,10 @@ export default function ProductDetailPage() {
           )}
         </div>
       </div>
-      {product && <RecommendationPanel key={product.id} productId={product.id} />}
+      {product && <>
+        <ProductOptions specs={product.specs} />
+        <RecommendationPanel key={product.id} productId={product.id} />
+      </>}
     </div>
   );
 }

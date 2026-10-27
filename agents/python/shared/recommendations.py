@@ -121,6 +121,7 @@ async def get_recommendation_evidence(product_id: str | UUID) -> dict[str, Any]:
         f"{key.replace('_', ' ').capitalize()}: "
         + (json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else str(value))
         for key, value in (specs or {}).items()
+        if key != "demo_options"
     ]
     catalogue_text = "\n".join(
         [
@@ -143,6 +144,23 @@ async def get_recommendation_evidence(product_id: str | UUID) -> dict[str, Any]:
             "is_synthetic": False,
         }
     ]
+    demo_options = (specs or {}).get("demo_options")
+    if isinstance(demo_options, dict) and demo_options.get("is_synthetic") is True:
+        attributes = demo_options.get("attributes", {})
+        if isinstance(attributes, dict) and attributes:
+            sources.append(
+                {
+                    "id": f"demo-options:{pid}",
+                    "kind": "catalogue",
+                    "title": f"{product['name']} demo catalogue options",
+                    "text": "Synthetic demo catalogue options (not verified manufacturer offerings).\n"
+                    + "\n".join(f"{key.replace('_', ' ').capitalize()}: {value}" for key, value in attributes.items())
+                    + "\nThese are listed options, not colour/size stock records. "
+                    "Stock totals do not establish availability of a particular colour or size.",
+                    "origin": str(demo_options.get("source", "Synthetic classroom catalogue options")),
+                    "is_synthetic": True,
+                }
+            )
     sources.extend(
         {
             "id": f"document:{d['id']}",

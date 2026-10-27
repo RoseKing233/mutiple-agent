@@ -189,3 +189,79 @@ async def test_http_bad_token_not_treated_as_anonymous(catalogue: Any) -> None:
             f"/api/products/{PID}/recommendation-evidence", headers={"Authorization": "Bearer invalid"}
         )
         assert response.status_code == 401
+
+
+def options_importer() -> Any:
+    spec = importlib.util.spec_from_file_location("seed_catalogue_options", ROOT / "scripts/seed_catalogue_options.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+async def test_options_import_backs_up_preserves_existing_data_and_is_repeatable(
+    catalogue: Any, tmp_path: Path
+) -> None:
+    module = options_importer()
+    backup = tmp_path / "options-backup.json"
+    async with catalogue.acquire() as conn:
+        before = dict(await conn.fetchrow("SELECT * FROM products WHERE id = $1", PID))
+        assert (await module.seed_options(conn))["planned_updates"] == 1
+        assert dict(await conn.fetchrow("SELECT * FROM products WHERE id = $1", PID)) == before
+        with pytest.raises(ValueError, match="backup path"):
+            await module.seed_options(conn, apply=True)
+        assert not backup.exists()
+        result = await module.seed_options(conn, apply=True, backup_path=backup)
+        assert result["updated"] == 1
+        saved = json.loads(backup.read_text())
+        assert saved["changes"][0]["before"] == {"battery": "30 hours"}
+        updated = dict(await conn.fetchrow("SELECT * FROM products WHERE id = $1", PID))
+        new_specs = json.loads(updated.pop("specs"))
+        before.pop("specs")
+        assert updated == before  # price, description, cached stats, identities all unchanged
+        assert new_specs["battery"] == "30 hours"
+        assert new_specs["demo_options"]["attributes"]["colours"] == ["Black", "Silver", "Blue"]
+        assert new_specs["demo_options"]["is_synthetic"] is True
+        assert await conn.fetchval("SELECT specs FROM products WHERE id = $1", OTHER) == json.dumps(
+            {"battery": "30 hours"}
+        )
+        assert await conn.fetchval("SELECT COUNT(*) FROM warehouse_inventory") == 0
+        assert (await module.seed_options(conn, apply=True, backup_path=backup))["updated"] == 0
+
+
+async def test_options_import_never_replaces_existing_real_or_demo_colours(catalogue: Any, tmp_path: Path) -> None:
+    module = options_importer()
+    async with catalogue.acquire() as conn:
+        for specs in ({"color": "Green"}, {"available_colors": ["Green"]}, {"demo_options": {"user_edited": True}}):
+            await conn.execute("UPDATE products SET specs = $2::jsonb WHERE id = $1", PID, json.dumps(specs))
+            result = await module.seed_options(conn, apply=True, backup_path=tmp_path / "unused.json")
+            assert result["updated"] == 0
+            assert json.loads(await conn.fetchval("SELECT specs FROM products WHERE id = $1", PID)) == specs
+        assert not (tmp_path / "unused.json").exists()
+
+
+async def test_red_demo_option_is_citable_separately_from_original_catalogue(catalogue: Any, tmp_path: Path) -> None:
+    async with catalogue.acquire() as conn:
+        await conn.execute("UPDATE products SET name = 'Hydro Flask 32oz Wide Mouth' WHERE id = $1", PID)
+        await options_importer().seed_options(conn, apply=True, backup_path=tmp_path / "backup.json")
+    evidence = await get_recommendation_evidence(PID)
+    options_source = next(s for s in evidence["sources"] if s["id"] == f"demo-options:{PID}")
+    assert options_source["is_synthetic"] is True
+    assert options_source["kind"] == "catalogue"
+    assert "Red" in options_source["text"]
+    assert "not colour/size stock records" in options_source["text"]
+    catalogue_source = next(s for s in evidence["sources"] if s["id"] == f"product:{PID}")
+    assert "Red" not in catalogue_source["text"]
+    assert "demo_options" not in catalogue_source["text"]
+    assert evidence["product"]["available_quantity"] is None
+    assert evidence["product"]["specs"]["demo_options"]["attributes"]["colours"][0] == "Red"
+
+
+async def test_options_backup_conflict_does_not_modify_database(catalogue: Any, tmp_path: Path) -> None:
+    backup = tmp_path / "existing.json"
+    backup.write_text("Existing backup")
+    async with catalogue.acquire() as conn:
+        before = await conn.fetchval("SELECT specs FROM products WHERE id = $1", PID)
+        with pytest.raises(FileExistsError):
+            await options_importer().seed_options(conn, apply=True, backup_path=backup)
+        assert await conn.fetchval("SELECT specs FROM products WHERE id = $1", PID) == before
+    assert backup.read_text() == "Existing backup"
