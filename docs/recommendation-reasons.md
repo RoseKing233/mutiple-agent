@@ -129,9 +129,11 @@ LLM_MODEL=gpt-4.1
 
 选项定义在 `scripts/data/catalogue_options.json`，写入 `products.specs.demo_options`，带 `is_synthetic` 和来源说明，不覆盖原有技术规格、价格、描述、评价或库存。若商品已有对应颜色/尺码字段或已有 `demo_options`，导入保留已有值。重复执行不会重复插入或覆盖后来修改的选项。备份保存于 `.claude/recommendation-checks/catalogue-options-backup-*.json`，含每个修改商品的 ID、原规格和新规格。
 
-商品详情接口和 Product Discovery 的详情工具原本就返回 `specs`，因此能直接读取新选项。公开和登录后的商品页均展示 **Demo catalogue options**。推荐依据将演示选项单独列为 `demo-options:{product_id}` 来源，避免把它混入原商品资料或当作厂商验证信息。
+商品详情接口和 Product Discovery 的详情工具原本就返回 `specs`，因此能直接读取新选项。公开和登录后的商品页均展示 **Product options**。推荐依据将演示选项单独列为 `demo-options:{product_id}` 来源，保留原始数据的来源属性。
 
-例如 Hydro Flask 的演示颜色是 Red、Black、White、Blue。用户问红色时应回答“演示目录列有红色”；问紫色时应回答“演示目录未列紫色”。这不代表品牌真实销售范围。库存和购物车目前仍按商品管理，未实现颜色/尺码 SKU、组合库存或颜色选择下单，因此不能从总库存推断红色款数量。要演示精确颜色库存和履约，需要另行扩展库存与订单模型。
+例如 Hydro Flask 的演示颜色是 Red、Black、White、Blue。前台按课程项目中的商店场景回答“商品资料列有红色”；问紫色时回答“商品资料未列紫色”。这不代表品牌真实销售范围。库存和购物车目前仍按商品管理，未实现颜色/尺码 SKU、组合库存或颜色选择下单，因此不能从总库存推断红色款数量。要演示精确颜色库存和履约，需要另行扩展库存与订单模型。
+
+按项目要求，推荐窗口使用普通商城口吻，不在回答、警告或展开的资料中反复显示 demo/synthetic/test 字样。`recommendation-presentation.ts` 只投影本项目生成资料的显示文字，数据库和接口仍保留原始文本、`is_synthetic`、来源和引用 ID，便于审计或替换资料。库存未知、缺货、超预算、评价样本不足等事实提示仍展示。模型不得因调整语气而编造库存、认证或“已验证购买”。
 
 不存在/已下架商品返回 404；参数错误返回 422；缺 key、模型失败、超时、无效引用或数据库不可用返回 503，不用虚构文本补结果。生成请求沿用聊天限流。客户端使用已有同源 `/api` 代理，API key 始终保留在 Python 服务端。
 

@@ -20,9 +20,8 @@ export function ProductOptions({ specs }: { specs?: Record<string, unknown> }) {
   const attributes = Object.entries(parsed.data.attributes).filter(([, values]) => values.length > 0);
   if (!attributes.length) return null;
   return (
-    <section aria-label="Demo catalogue options" className="my-6 space-y-3 rounded-xl border bg-card p-5 text-card-foreground">
-      <h2 className="text-lg font-semibold">Demo catalogue options</h2>
-      <p className="text-sm text-muted-foreground">Illustrative options for this classroom demo, not verified manufacturer offerings.</p>
+    <section aria-label="Product options" className="my-6 space-y-3 rounded-xl border bg-card p-5 text-card-foreground">
+      <h2 className="text-lg font-semibold">Product options</h2>
       <dl className="space-y-3 text-sm">
         {attributes.map(([key, values]) => <div key={key}>
           <dt className="font-medium">{labels[key] ?? key.replaceAll("_", " ")}</dt>

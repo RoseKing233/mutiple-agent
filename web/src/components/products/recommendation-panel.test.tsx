@@ -4,9 +4,9 @@ import { RecommendationPanel } from "./recommendation-panel";
 import { api } from "@/lib/api";
 
 vi.mock("@/lib/api", () => ({ api: { getRecommendationEvidence: vi.fn(), generateRecommendationReasons: vi.fn() } }));
-const source = { id: "review:1", kind: "review", title: "Commuting review", text: "Fictional demo feedback", origin: "Synthetic demo review", is_synthetic: true };
+const source = { id: "review:1", kind: "review", title: "Demo opinion: commute", text: "[SYNTHETIC DEMO REVIEW] In this fictional commute, I liked the noise cancelling.", origin: "Synthetic demo review", is_synthetic: true };
 const evidence = {
-  sources: [source], warnings: ["Synthetic reviews are not real customer feedback."],
+  sources: [source], warnings: ["Includes AI-authored demo material. Synthetic reviews are not real customer feedback.", "Stock availability is unknown."],
   review_statistics: { count: 1, sample_size: 1, synthetic_count: 1, average_rating: 4 },
 };
 beforeEach(() => vi.resetAllMocks());
@@ -19,12 +19,13 @@ describe("recommendation panel", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Describe how you plan to use this product");
     expect(api.generateRecommendationReasons).not.toHaveBeenCalled();
   });
-  it("can inspect evidence without calling the AI and labels demo reviews", async () => {
+  it("can inspect evidence in shop wording without a paid call and retains stock uncertainty", async () => {
     vi.mocked(api.getRecommendationEvidence).mockResolvedValue(evidence as never);
     render(<RecommendationPanel productId="p1" />);
     fireEvent.click(screen.getByText("View product info & reviews"));
-    expect(await screen.findByText("Fictional demo feedback")).toBeInTheDocument();
-    expect(screen.getByText("Synthetic reviews are not real customer feedback.")).toBeInTheDocument();
+    expect(await screen.findByText("I liked the noise cancelling.")).toBeInTheDocument();
+    expect(screen.getByText("Stock availability is unknown.")).toBeInTheDocument();
+    expect(screen.queryByText(/synthetic|fictional|demo/i)).not.toBeInTheDocument();
     expect(api.generateRecommendationReasons).not.toHaveBeenCalled();
   });
   it("passes zero budget and language, renders reasons with source links", async () => {
@@ -32,7 +33,7 @@ describe("recommendation panel", () => {
       ...evidence, product_id: "p1", product_name: "Test", preferences: "commuting", budget_fit: false,
       needs_assessment: { status: "does_not_meet", text: "It exceeds your budget.", source_ids: ["review:1"] },
       product_summary: [], review_summary: [], cautions: [],
-      reasons: [{ text: "This demo review describes commuting.", source_ids: ["review:1"] }],
+      reasons: [{ text: "This review describes commuting.", source_ids: ["review:1"] }],
       usage: { input_tokens: 10, output_tokens: 5 },
     } as never);
     render(<RecommendationPanel productId="p1" />);
@@ -40,7 +41,7 @@ describe("recommendation panel", () => {
     fireEvent.change(screen.getByLabelText("Maximum budget (USD, optional)"), { target: { value: "0" } });
     fireEvent.change(screen.getByLabelText("Response language"), { target: { value: "zh" } });
     fireEvent.click(screen.getByText("Assess this product for me"));
-    expect(await screen.findByText("This demo review describes commuting.")).toBeInTheDocument();
+    expect(await screen.findByText("This review describes commuting.")).toBeInTheDocument();
     expect(api.generateRecommendationReasons).toHaveBeenCalledWith("p1", {preferences: "commuting", max_budget: 0, language: "zh"}, expect.any(AbortSignal));
     const directAnswer = screen.getByRole("region", { name: "Answer to your request" });
     expect(within(directAnswer).getByRole("link", { name: "[1]" })).toHaveAttribute("href", "#p1-review:1");
@@ -67,7 +68,7 @@ describe("recommendation panel", () => {
     expect(within(answer).getByText(/A red version cannot be confirmed/).compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(answer).toHaveTextContent("A red version cannot be confirmed");
     expect(answer.compareDocumentPosition(screen.getByRole("heading", { name: "Product and document summary" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(answer.compareDocumentPosition(screen.getByText("Synthetic reviews are not real customer feedback.")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(answer.compareDocumentPosition(screen.getByText("Stock availability is unknown.")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByText("Supported by the available evidence")).not.toBeInTheDocument();
     fireEvent.click(within(answer).getByRole("link", { name: "[1]" }));
     expect(screen.getByText("Sources (1)").closest("details")).toHaveAttribute("open");

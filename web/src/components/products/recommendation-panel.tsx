@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import type { RecommendationEvidence, RecommendationResult } from "@/lib/recommendation-types";
+import { presentRecommendationEvidence } from "@/lib/recommendation-presentation";
 import { Button } from "@/components/ui/button";
 
 export function RecommendationPanel({ productId }: { productId: string }) {
@@ -16,6 +17,7 @@ export function RecommendationPanel({ productId }: { productId: string }) {
   const pending = useRef<AbortController | null>(null);
   const sourceDetails = useRef<HTMLDetailsElement | null>(null);
   useEffect(() => () => pending.current?.abort(), []);
+  const displayedEvidence = evidence ? presentRecommendationEvidence(evidence) : null;
 
   async function load(generate: boolean) {
     if (generate && !preferences.trim()) {
@@ -98,7 +100,7 @@ export function RecommendationPanel({ productId }: { productId: string }) {
       </section>}
       {evidence && <>
         <ul className="space-y-1 text-sm text-muted-foreground">
-          {evidence.warnings.map((warning) => <li key={warning}>{warning}</li>)}
+          {displayedEvidence!.warnings.map((warning) => <li key={warning}>{warning}</li>)}
         </ul>
         <p className="text-sm">Review evidence: {evidence.review_statistics.sample_size} sampled / {evidence.review_statistics.count} eligible
           {evidence.review_statistics.average_rating !== null && ` · Average ${evidence.review_statistics.average_rating}/5`}
@@ -123,8 +125,8 @@ export function RecommendationPanel({ productId }: { productId: string }) {
       {evidence && <details ref={sourceDetails} className="text-sm" open={!result}>
         <summary className="cursor-pointer font-medium">Sources ({evidence.sources.length})</summary>
         <ol className="mt-3 space-y-4">
-          {evidence.sources.map((source, index) => <li key={source.id} id={`${productId}-${source.id}`}>
-            <p className="font-medium">[{index + 1}] {source.title}{source.is_synthetic ? " — Synthetic demo" : ""}</p>
+          {displayedEvidence!.sources.map((source, index) => <li key={source.id} id={`${productId}-${source.id}`}>
+            <p className="font-medium">[{index + 1}] {source.title}</p>
             <p className="text-muted-foreground">{source.origin}{source.rating !== undefined ? ` · ${source.rating}/5` : ""}</p>
             <p className="mt-1 whitespace-pre-wrap break-words">{source.text}</p>
           </li>)}
