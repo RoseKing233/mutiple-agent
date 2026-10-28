@@ -1,6 +1,10 @@
 import { test, expect } from "@playwright/test";
 import { mkdir, writeFile } from "node:fs/promises";
 
+// Detect provenance disclaimers, not legitimate statements about missing lab
+// measurements such as "没有独立降噪测试数据" or "no acoustic test data".
+const provenanceDisclaimer = /\b(?:demo|synthetic|classroom|fictional)\b|(?:test|testing) (?:dataset|catalogue|catalog|reviews)|(?:演示|模拟)(?:目录|资料|数据|评价|评论|内容)|(?:用于|仅供)测试(?:的)?(?:数据|资料|内容)/i;
+
 // Explicit manual opt-in only. One generation request spends real API credit.
 test("live Chinese recommendation respects a low budget and opens cited sources", async ({ page, request }) => {
   test.skip(process.env.RUN_LIVE_RECOMMENDATION !== "true", "Set RUN_LIVE_RECOMMENDATION=true for one paid test.");
@@ -35,7 +39,7 @@ test("live Chinese recommendation respects a low budget and opens cited sources"
   }
   expect(result.reasons.some((point: { text: string }) => /[\u4e00-\u9fff]/.test(point.text))).toBe(true);
   const chineseText = [result.needs_assessment.text, ...["product_summary", "review_summary", "reasons", "cautions"].flatMap((section) => result[section].map((point: { text: string }) => point.text))].join("\n");
-  expect(chineseText).not.toMatch(/demo|synthetic|classroom|fictional|test data|演示|模拟|测试数据/i);
+  expect(chineseText).not.toMatch(provenanceDisclaimer);
   await expect(panel.getByText("This product exceeds your stated budget.")).toBeVisible();
   await expect(panel.getByRole("alert")).toHaveCount(0);
   await mkdir("../.claude/recommendation-checks", { recursive: true });
@@ -82,7 +86,7 @@ test("live black bottle request confirms the listed colour in normal shop wordin
   expect(result.needs_assessment.text.split(/[.!?]/)[0]).toMatch(/black/i);
   expect(result.needs_assessment.text).toMatch(/^Yes[, ]/i);
   const generatedText = [result.needs_assessment.text, ...["product_summary", "review_summary", "reasons", "cautions"].flatMap((section) => result[section].map((point: { text: string }) => point.text))].join("\n");
-  expect(generatedText).not.toMatch(/demo|synthetic|classroom|fictional|test data|演示|模拟|测试数据/i);
+  expect(generatedText).not.toMatch(provenanceDisclaimer);
   expect(result.needs_assessment.source_ids).toContain(`demo-options:${product.id}`);
   const known = new Set(result.sources.map((source: { id: string }) => source.id));
   expect(result.needs_assessment.source_ids.length).toBeGreaterThan(0);

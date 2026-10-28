@@ -10,6 +10,7 @@ from shared.recommendations import (
     RecommendationDraft,
     RecommendationRequest,
     RecommendationUnavailableError,
+    listed_colour_assessment,
     recommendation_response_format,
     validate_recommendation,
 )
@@ -165,6 +166,100 @@ def test_unknown_stock_is_not_treated_as_zero_stock() -> None:
     fields = draft().model_dump()
     fields["needs_assessment"]["status"] = "cannot_confirm"
     response_format.model_validate(fields)
+
+
+def colour_evidence() -> dict:
+    return {
+        "product": {
+            "id": "1",
+            "available_quantity": 12,
+            "specs": {"demo_options": {"attributes": {"colours": ["Black", "Red", "Rose Gold"]}}},
+        },
+        "sources": [*EVIDENCE["sources"], {"id": "demo-options:1", "kind": "catalogue"}],
+    }
+
+
+@pytest.mark.parametrize(
+    "preferences,language,colour",
+    [
+        ("I want a Black one", "en", "Black"),
+        ("I'd like a rose gold version.", "en", "Rose Gold"),
+        ("I prefer a red option of this model", "zh", "红色"),
+        ("我想要一个黑色的", "zh", "黑色"),
+    ],
+)
+def test_simple_listed_colour_has_a_stable_cited_answer(preferences: str, language: str, colour: str) -> None:
+    evidence = colour_evidence()
+    request = RecommendationRequest(preferences=preferences, language=language)
+    assessment = listed_colour_assessment(evidence, request)
+    assert assessment is not None
+    assert colour in assessment.text
+    assert assessment.source_ids == ["demo-options:1"]
+    fields = draft(needs_assessment=assessment.model_dump()).model_dump()
+    response_format = recommendation_response_format(evidence, budget_fit=True, request=request)
+    response_format.model_validate(fields)
+    validate_recommendation(response_format.model_validate(fields), evidence)
+    for field, incorrect in [
+        ("status", "cannot_confirm"),
+        ("text", "Black is unavailable."),
+        ("source_ids", ["r:1"]),
+    ]:
+        with pytest.raises(ValidationError):
+            response_format.model_validate(fields | {"needs_assessment": assessment.model_dump() | {field: incorrect}})
+
+
+@pytest.mark.parametrize(
+    "preferences",
+    [
+        "I want a green one",
+        "I don't want a black one",
+        "I want a black one in stock",
+        "I want a red one in size M",
+        "I want a black one and waterproofing",
+        "How many black ones can ship today?",
+        "我想要黑色的，但必须防水",
+        "我想要一个绿色的",
+    ],
+)
+def test_complex_or_unlisted_colour_requests_are_not_forced_to_match(preferences: str) -> None:
+    assert listed_colour_assessment(colour_evidence(), RecommendationRequest(preferences=preferences)) is None
+
+
+@pytest.mark.parametrize(
+    "budget_fit,stock,expected",
+    [(False, 12, "does_not_meet"), (True, 0, "does_not_meet"), (True, None, "cannot_confirm")],
+)
+def test_listed_colour_does_not_override_budget_or_unknown_or_zero_stock(
+    budget_fit: bool,
+    stock: int | None,
+    expected: str,
+) -> None:
+    evidence = colour_evidence()
+    evidence["product"]["available_quantity"] = stock
+    request = RecommendationRequest(preferences="I want a black one")
+    response_format = recommendation_response_format(evidence, budget_fit=budget_fit, request=request)
+    fields = draft(
+        needs_assessment={"status": expected, "text": "Other constraint.", "source_ids": ["p:1"]}
+    ).model_dump()
+    response_format.model_validate(fields)
+    if stock is not None:
+        fields["needs_assessment"]["status"] = "meets_needs"
+        with pytest.raises(ValidationError):
+            response_format.model_validate(fields)
+
+
+@pytest.mark.parametrize("missing", ["source", "colours", "attributes", "specs"])
+def test_colour_confirmation_requires_structured_options_and_the_matching_source(missing: str) -> None:
+    evidence = colour_evidence()
+    if missing == "source":
+        evidence["sources"].pop()
+    elif missing == "specs":
+        evidence["product"]["specs"] = None
+    elif missing == "attributes":
+        evidence["product"]["specs"]["demo_options"]["attributes"] = None
+    else:
+        evidence["product"]["specs"]["demo_options"]["attributes"]["colours"] = "Black, Red"
+    assert listed_colour_assessment(evidence, RecommendationRequest(preferences="I want a black one")) is None
 
 
 @pytest.mark.parametrize("mcp", [False, True])

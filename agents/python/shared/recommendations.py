@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from typing import Any, Literal
 from uuid import UUID
@@ -58,8 +59,66 @@ class RecommendationDraft(BaseModel):
     cautions: list[CitedPoint] = Field(max_length=5)
 
 
+def listed_colour_assessment(evidence: dict[str, Any], request: RecommendationRequest) -> NeedsAssessment | None:
+    """Resolve an unambiguous colour-only preference against structured listings.
+
+    This intentionally uses a full-string grammar, not keyword detection. Stock,
+    delivery, size, negation and multi-requirement requests remain model-assessed.
+    It confirms a listing only; it cannot promise a colour-specific stock quantity.
+    """
+    preferences = request.preferences.casefold().strip()
+    english = re.fullmatch(
+        r"(?:i (?:want|need|prefer|would like|am looking for)|i'm looking for|i'd like) "
+        r"(?:an? )?([a-z]+(?: [a-z]+){0,2}) (?:one|version|option)"
+        r"(?: (?:of this (?:model|product)|in this style))?[.!]?",
+        preferences,
+    )
+    chinese = re.fullmatch(r"(?:我)?(?:想要|想买|需要|要)(?:一[个款])?(.+?)(?:的)?[。！]?", preferences)
+    translations = {
+        "black": "黑色",
+        "white": "白色",
+        "red": "红色",
+        "blue": "蓝色",
+        "green": "绿色",
+        "yellow": "黄色",
+        "pink": "粉色",
+        "purple": "紫色",
+        "orange": "橙色",
+        "grey": "灰色",
+        "gray": "灰色",
+        "silver": "银色",
+        "gold": "金色",
+        "rose gold": "玫瑰金",
+        "beige": "米色",
+        "brown": "棕色",
+    }
+    if english:
+        requested = english[1]
+    elif chinese:
+        requested = next((name for name, translated in translations.items() if translated == chinese[1]), "")
+    else:
+        return None
+    product = evidence.get("product", {})
+    specs = product.get("specs") or {}
+    options = specs.get("demo_options", {}) if isinstance(specs, dict) else {}
+    attributes = options.get("attributes", {}) if isinstance(options, dict) else {}
+    colours = attributes.get("colours", []) if isinstance(attributes, dict) else []
+    if not isinstance(colours, list):
+        return None
+    colour = next((value for value in colours if isinstance(value, str) and value.casefold() == requested), None)
+    source_id = f"demo-options:{product.get('id')}"
+    if colour is None or not any(s["id"] == source_id and s["kind"] == "catalogue" for s in evidence["sources"]):
+        return None
+    if request.language == "zh":
+        display = translations.get(requested, colour)
+        text = f"是的，商品资料列有{display}选项。该颜色的具体库存未单独记录。"
+    else:
+        text = f"Yes, this model is listed with a {colour} option. Stock for that colour is not recorded separately."
+    return NeedsAssessment(status="meets_needs", text=text, source_ids=[source_id])
+
+
 def recommendation_response_format(
-    evidence: dict[str, Any], *, budget_fit: bool | None = None
+    evidence: dict[str, Any], *, budget_fit: bool | None = None, request: RecommendationRequest | None = None
 ) -> type[RecommendationDraft]:
     """Constrain generated citations to this request's evidence and section kinds.
 
@@ -86,6 +145,18 @@ def recommendation_response_format(
     if budget_fit is False or (stock is not None and stock <= 0):
         # These are known constraints, not judgements left to the model.
         assessment = create_model("UnavailableAssessment", __base__=assessment, status=(Literal["does_not_meet"], ...))
+    elif request is not None and stock is not None and stock > 0:
+        confirmed_colour = listed_colour_assessment(evidence, request)
+        if confirmed_colour is not None:
+            # Freeze only this narrow, source-backed fact. Other requirements and
+            # all explanatory sections still use the normal grounded generation.
+            assessment = create_model(
+                "ListedColourAssessment",
+                __base__=assessment,
+                status=(Literal["meets_needs"], ...),
+                text=(Literal[confirmed_colour.text], ...),
+                source_ids=(list[Literal[tuple(confirmed_colour.source_ids)]], Field(min_length=1, max_length=1)),
+            )
     product_point = cited_type("ProductEvidencePoint", CitedPoint, {"catalogue", "document"})
     has_reviews = any(source["kind"] == "review" for source in sources)
     review_point = cited_type("ReviewEvidencePoint", CitedPoint, {"review"}) if has_reviews else CitedPoint
@@ -291,7 +362,7 @@ async def generate_recommendation(
     tokens_in = tokens_out = 0
     status = "error"
     try:
-        response_format = recommendation_response_format(evidence, budget_fit=budget_fit)
+        response_format = recommendation_response_format(evidence, budget_fit=budget_fit, request=request)
         async with Agent(
             client=get_chat_client(),
             name="recommendation-reasons",

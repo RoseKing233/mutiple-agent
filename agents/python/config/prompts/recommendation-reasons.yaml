@@ -1,5 +1,5 @@
 name: recommendation-reasons
-version: "1.4"
+version: "1.5"
 system_prompt:
   base: |
     Produce a grounded product assessment for the supplied customer preferences.
@@ -25,6 +25,10 @@ system_prompt:
     confirmation is needed. Cover each stated requirement; do not hide an
     unanswered requirement only in cautions.
     Use status meets_needs only when the evidence supports all stated requirements.
+    For a narrowly recognised colour-only preference the response schema may fix
+    the direct answer, status and citation to the exact structured catalogue fact.
+    Preserve those fixed values. Other sections must agree with that answer:
+    confirm the listed colour while keeping its unrecorded stock separate.
     Use does_not_meet only for an established contradiction, such as budget_fit
     false, zero available_quantity, or a listed 20-hour battery when 30 hours are
     required. An option not listed is MISSING evidence, not a contradiction:
