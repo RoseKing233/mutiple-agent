@@ -1,0 +1,69 @@
+{
+  "source": "AI-authored synthetic classroom demo; not manufacturer documentation or real customer feedback",
+  "products": [
+    {
+      "name": "Sony WH-1000XM5",
+      "guide": "The catalogue describes wireless over-ear headphones with noise cancelling, a 30-hour battery and multipoint connection. When evaluating a commute-oriented request, compare those listed features with the customer's requirements. The catalogue does not establish waterproofing or independent noise-reduction measurements.",
+      "reviews": [
+        {"rating": 5, "title": "Demo opinion: commute", "body": "In this fictional commuting scenario, I liked the noise cancelling and being able to connect more than one device. Those were more useful to me than cosmetic features."},
+        {"rating": 3, "title": "Demo opinion: budget trade-off", "body": "In this fictional purchase, the headphones covered my listening needs, but the price was a concern on a tight budget. I would compare cheaper options before buying."}
+      ]
+    },
+    {
+      "name": "AirPods Max",
+      "guide": "The stored description highlights active noise cancellation and spatial audio. The listed weight is 384g and battery life is 20 hours. A recommendation should relate these catalogue facts to the customer's priorities rather than assuming the product is best for everyone.",
+      "reviews": [
+        {"rating": 4, "title": "Demo opinion: listening", "body": "For this fictional listening session, spatial audio was the feature I most enjoyed. I would prioritise the listening experience when comparing alternatives."},
+        {"rating": 2, "title": "Demo opinion: portability", "body": "In this fictional travel scenario, I found the headphones heavier than I wanted. I would favour a lighter option for carrying around all day."}
+      ]
+    },
+    {
+      "name": "Logitech MX Master 3S",
+      "guide": "The catalogue lists an 8K DPI wireless mouse with quiet clicks, MagSpeed scrolling and multi-device support. The data does not specify suitability for every hand size or operating-system feature compatibility; those details should not be inferred.",
+      "reviews": [
+        {"rating": 5, "title": "Demo opinion: office work", "body": "In my fictional office setup, quiet clicks and switching between devices were useful for everyday work."},
+        {"rating": 3, "title": "Demo opinion: personal fit", "body": "In this fictional evaluation, I wanted to try the shape in person before deciding whether it suited my hand. The feature list alone did not settle comfort for me."}
+      ]
+    },
+    {
+      "name": "Kindle Paperwhite Signature",
+      "guide": "The catalogue describes a 6.8-inch e-reader with 32GB storage, wireless charging and an auto-adjusting front light. Treat the listed battery figure as a catalogue claim, not a measured result from these demo reviews.",
+      "reviews": [
+        {"rating": 5, "title": "Demo opinion: reading", "body": "In this fictional reading scenario, I appreciated the adjustable front light and the convenience of wireless charging."},
+        {"rating": 3, "title": "Demo opinion: occasional use", "body": "In this fictional purchase decision, I only read occasionally, so I was unsure I needed the extra storage. A lower-priced reader might be sufficient for my needs."}
+      ]
+    },
+    {
+      "name": "North Face Thermoball Eco Jacket",
+      "guide": "The stored product facts describe recycled polyester, ThermoBall Eco insulation and a packable design. No temperature rating or waterproof certification is present in this catalogue entry.",
+      "reviews": [
+        {"rating": 4, "title": "Demo opinion: packing", "body": "In this fictional trip, the packable design was useful because I wanted to leave room in my bag."},
+        {"rating": 3, "title": "Demo opinion: weather needs", "body": "For this fictional wet-weather trip, I wanted more information about rain protection before choosing this jacket."}
+      ]
+    },
+    {
+      "name": "Patagonia Better Sweater",
+      "guide": "The catalogue lists a recycled-polyester fleece with a 539g weight and a Fair Trade attribute. Do not infer waterproofness, a temperature rating or an independently verified environmental impact from these fields.",
+      "reviews": [
+        {"rating": 4, "title": "Demo opinion: everyday layer", "body": "In this fictional everyday-wear scenario, I liked the fleece as an extra layer and valued the listed recycled material."},
+        {"rating": 3, "title": "Demo opinion: bag space", "body": "In this fictional packing exercise, I wanted to compare lighter layers before making a final choice."}
+      ]
+    },
+    {
+      "name": "Dyson V15 Detect",
+      "guide": "The catalogue describes a cordless vacuum with laser dust detection and a particle-count display. Its listed runtime is 60 minutes and weight is 3.1kg. The data does not establish that the maximum runtime applies in every cleaning mode.",
+      "reviews": [
+        {"rating": 5, "title": "Demo opinion: cleaning feedback", "body": "In this fictional cleaning session, the dust display was useful feedback and the cordless format was convenient."},
+        {"rating": 3, "title": "Demo opinion: price", "body": "In this fictional comparison, the price made me consider whether a simpler vacuum would meet my needs."}
+      ]
+    },
+    {
+      "name": "Nespresso Vertuo Next",
+      "guide": "The stored description lists Centrifusion brewing and barcode recognition. Brew sizes and water-tank capacity are available in the catalogue. Ongoing capsule costs and compatibility details are not supplied.",
+      "reviews": [
+        {"rating": 4, "title": "Demo opinion: morning routine", "body": "In this fictional morning routine, I liked having several listed cup-size choices."},
+        {"rating": 3, "title": "Demo opinion: running costs", "body": "In this fictional buying decision, I wanted to check capsule prices and compatibility before committing to the machine."}
+      ]
+    }
+  ]
+}

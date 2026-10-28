@@ -17,6 +17,11 @@ cd web && pnpm install                        # frontend (pnpm, not npm/yarn)
 Requires Docker, `uv`, `pnpm`, and a real `OPENAI_API_KEY` (or `AZURE_OPENAI_*`)
 in `.env` — the LLM is never mocked.
 
+Sales/inventory data setup and handover: [docs/sales-analysis/README.md](docs/sales-analysis/README.md).
+Ordinary startup migrates and preserves existing business data; rebuilding requires an explicit
+`scripts/seed.py --reset` or `scripts/dev.ps1 -SeedOnly -ResetData`.
+The offline data preview and database tests do not require a live LLM key.
+
 ## Conventions
 
 Conventions live in [`CLAUDE.md`](./CLAUDE.md) (the canonical guide). Highlights:

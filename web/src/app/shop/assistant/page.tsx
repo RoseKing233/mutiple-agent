@@ -44,10 +44,13 @@ function Assistant() {
           trimmed,
           undefined,
           (chunk) => {
+            // React Strict Mode can replay updaters; never mutate a saved message.
             setMessages((m) => {
               const next = [...m];
               const last = next[next.length - 1];
-              if (last?.role === "assistant") last.content += chunk;
+              if (last?.role === "assistant") {
+                next[next.length - 1] = { ...last, content: last.content + chunk };
+              }
               return next;
             });
           },
@@ -57,7 +60,9 @@ function Assistant() {
               setMessages((m) => {
                 const next = [...m];
                 const last = next[next.length - 1];
-                if (last?.role === "assistant") last.steps = [...(last.steps ?? []), step];
+                if (last?.role === "assistant") {
+                  next[next.length - 1] = { ...last, steps: [...(last.steps ?? []), step] };
+                }
                 return next;
               });
             },
@@ -65,7 +70,9 @@ function Assistant() {
               setMessages((m) => {
                 const next = [...m];
                 const last = next[next.length - 1];
-                if (last?.role === "assistant") last.grounding = report;
+                if (last?.role === "assistant") {
+                  next[next.length - 1] = { ...last, grounding: report };
+                }
                 return next;
               });
             },
@@ -76,7 +83,7 @@ function Assistant() {
           const next = [...m];
           const last = next[next.length - 1];
           if (last?.role === "assistant" && !last.content) {
-            last.content = "Sorry — I couldn't reach the assistant. Please try again.";
+            next[next.length - 1] = { ...last, content: "Sorry — I couldn't reach the assistant. Please try again." };
           }
           return next;
         });

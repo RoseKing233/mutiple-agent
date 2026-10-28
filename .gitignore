@@ -59,12 +59,35 @@ playwright/.cache/
 
 # Environment
 .env
-.env.local
-.env.*.local
+.env.*
 !.env.example
+!.env.*.example
+!.env.minimal
 
 # Docker
 docker/postgres/data/
+
+# Local runtime data and manual database/chat exports (never source migrations)
+/local-data/
+/backups/
+/exports/
+docker/redis/data/
+*.dump
+*.backup
+*.sql.gz
+*.sql.zip
+*.db
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
+*.rdb
+*.aof
+
+# Regenerable screenshots from the local course-project demo
+.claude/manager-*.png
 
 # IDE
 .vscode/

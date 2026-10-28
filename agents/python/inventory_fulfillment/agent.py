@@ -8,6 +8,7 @@ of calling asyncpg directly. Both modes expose the same capabilities.
 from agent_framework import Agent
 from agent_framework._mcp import MCPStreamableHTTPTool
 
+from inventory_fulfillment.context import InventoryRoleProvider
 from inventory_fulfillment.prompts import get_system_prompt
 from inventory_fulfillment.tools import (
     calculate_fulfillment_plan,
@@ -19,12 +20,13 @@ from inventory_fulfillment.tools import (
 )
 from shared.agent_factory import create_chat_client
 from shared.config import settings
-from shared.context import current_user_role
 from shared.context_providers import ECommerceContextProvider
 from shared.middleware import build_specialist_middleware
 from shared.oauth.service_client import acquire_service_token, build_mcp_http_client, set_mcp_auth_header
+from shared.tools.inventory_management_tools import INVENTORY_MANAGEMENT_TOOLS
 from shared.tools.inventory_tools import check_stock, get_warehouse_availability
 from shared.tools.product_lookup_tools import find_product_by_name
+from shared.tools.sales_analysis_tools import SALES_ANALYSIS_TOOLS
 from shared.tools.user_tools import get_user_profile
 
 AGENT_TOOLS = [
@@ -38,6 +40,8 @@ AGENT_TOOLS = [
     calculate_fulfillment_plan,
     place_backorder,
     get_user_profile,
+    *SALES_ANALYSIS_TOOLS,
+    *INVENTORY_MANAGEMENT_TOOLS,
 ]
 
 # Set once by create_inventory_fulfillment_agent() when MCP_ENABLED+MCP_AUTH_ENABLED;
@@ -72,6 +76,8 @@ def create_inventory_fulfillment_agent() -> Agent:
             calculate_fulfillment_plan,
             place_backorder,
             get_user_profile,
+            *SALES_ANALYSIS_TOOLS,
+            *INVENTORY_MANAGEMENT_TOOLS,
         ]
     else:
         tools = AGENT_TOOLS  # type: ignore[assignment]
@@ -80,9 +86,9 @@ def create_inventory_fulfillment_agent() -> Agent:
         client=create_chat_client(),
         name="inventory-fulfillment",
         description="Real-time inventory tracking, shipping estimation, carrier comparison, and backorder management.",
-        instructions=get_system_prompt(current_user_role.get() or "customer"),
+        instructions=get_system_prompt(None),
         tools=tools,
-        context_providers=[ECommerceContextProvider()],
+        context_providers=[InventoryRoleProvider(), ECommerceContextProvider()],
         middleware=build_specialist_middleware(),
     )
 

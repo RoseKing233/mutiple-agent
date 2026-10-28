@@ -1,6 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { Suspense, useState, useEffect, useCallback } from "react";
+import { ManagerProductDetail } from "@/components/manager/products";
+import { Loading } from "@/components/manager/dashboard";
+import { canAnalyze } from "@/lib/manager";
 import { useRouter, useParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { useCart } from "@/lib/cart-context";
@@ -38,6 +41,8 @@ import {
   Plus,
 } from "lucide-react";
 import { productImageUrl } from "@/lib/images";
+import { RecommendationPanel } from "@/components/products/recommendation-panel";
+import { ProductOptions } from "@/components/products/product-options";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -70,7 +75,7 @@ interface ProductDetail {
   rating: number;
   review_count: number;
   description: string;
-  specs?: Record<string, string>;
+  specs?: Record<string, unknown>;
   in_stock: boolean;
   total_stock: number;
   warehouses?: WarehouseStock[];
@@ -220,6 +225,12 @@ function DetailSkeleton() {
 // ---------------------------------------------------------------------------
 
 export default function ProductDetailPage() {
+  const { user, isLoading } = useAuth();
+  if (isLoading || !user) return null;
+  return canAnalyze(user.role) ? <Suspense fallback={<Loading />}><ManagerProductDetail /></Suspense> : <CustomerProductDetailPage />;
+}
+
+function CustomerProductDetailPage() {
   const router = useRouter();
   const params = useParams();
   const { user, isLoading: authLoading } = useAuth();
@@ -459,9 +470,12 @@ export default function ProductDetailPage() {
                 </CardContent>
               </Card>
 
+              <ProductOptions specs={product.specs} />
+              <RecommendationPanel key={product.id} productId={product.id} />
+
               {/* Specs */}
               {product.specs &&
-                Object.keys(product.specs).length > 0 && (
+                Object.keys(product.specs).some((key) => key !== "demo_options") && (
                   <Card>
                     <CardHeader>
                       <CardTitle>Specifications</CardTitle>
@@ -469,14 +483,14 @@ export default function ProductDetailPage() {
                     <CardContent>
                       <Table>
                         <TableBody>
-                          {Object.entries(product.specs).map(
+                          {Object.entries(product.specs).filter(([key]) => key !== "demo_options").map(
                             ([key, value]) => (
                               <TableRow key={key}>
                                 <TableCell className="w-1/3 font-medium text-foreground">
                                   {key}
                                 </TableCell>
                                 <TableCell className="text-muted-foreground">
-                                  {value}
+                                  {typeof value === "boolean" ? (value ? "Yes" : "No") : typeof value === "object" ? JSON.stringify(value) : String(value ?? "Not specified")}
                                 </TableCell>
                               </TableRow>
                             )

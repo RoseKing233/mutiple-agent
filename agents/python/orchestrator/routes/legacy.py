@@ -28,6 +28,7 @@ from shared.context import current_session_id, current_user_email, current_user_
 from shared.db import get_pool
 from shared.factory import get_token_verifier
 from shared.idempotency import idempotent
+from shared.inventory_ledger import change_inventory
 from shared.jwt_utils import (
     create_access_token,
     create_refresh_token,
@@ -179,6 +180,13 @@ async def require_seller(user: dict[str, Any] = Depends(require_auth)) -> dict[s
     """Require the authenticated user to have seller or admin role."""
     if user.get("role") not in ("seller", "admin"):
         raise HTTPException(status_code=403, detail="Seller access required")
+    return user
+
+
+async def require_shopper(user: dict[str, Any] = Depends(require_auth)) -> dict[str, Any]:
+    """Store managers use management APIs, not personal shopping operations."""
+    if user.get("role") == "store_manager":
+        raise HTTPException(status_code=403, detail="Shopping actions are unavailable for store managers")
     return user
 
 
@@ -1360,7 +1368,7 @@ async def get_product(product_id: str, _user: dict = Depends(optional_auth)):
 # ── Order Routes ──────────────────────────────────────────────
 
 
-@router.get("/api/orders")
+@router.get("/api/orders", dependencies=[Depends(require_shopper)])
 async def list_orders(
     status: str | None = None,
     limit: int = 20,
@@ -1415,7 +1423,7 @@ async def list_orders(
     }
 
 
-@router.get("/api/orders/{order_id}")
+@router.get("/api/orders/{order_id}", dependencies=[Depends(require_shopper)])
 async def get_order(order_id: str, user: dict = Depends(require_auth)):
     pool = get_pool()
     email = current_user_email.get()
@@ -1507,7 +1515,7 @@ async def get_order(order_id: str, user: dict = Depends(require_auth)):
     }
 
 
-@router.post("/api/orders/{order_id}/cancel")
+@router.post("/api/orders/{order_id}/cancel", dependencies=[Depends(require_shopper)])
 async def cancel_order(order_id: str, body: CancelOrderRequest, user: dict = Depends(require_auth)):
     """Cancel a placed or confirmed order."""
     pool = get_pool()
@@ -1550,7 +1558,7 @@ async def cancel_order(order_id: str, body: CancelOrderRequest, user: dict = Dep
     }
 
 
-@router.post("/api/orders/{order_id}/return")
+@router.post("/api/orders/{order_id}/return", dependencies=[Depends(require_shopper)])
 async def return_order(order_id: str, body: ReturnOrderRequest, user: dict = Depends(require_auth)):
     """Request a return for a delivered order."""
     pool = get_pool()
@@ -1827,7 +1835,7 @@ def _build_return_label_pdf(
 # ── Cart Routes ──────────────────────────────────────────────
 
 
-@router.get("/api/cart")
+@router.get("/api/cart", dependencies=[Depends(require_shopper)])
 async def get_cart(user: dict = Depends(require_auth)):
     """Get the current user's shopping cart with items."""
     pool = get_pool()
@@ -1906,7 +1914,7 @@ async def get_cart(user: dict = Depends(require_auth)):
     }
 
 
-@router.post("/api/cart/items")
+@router.post("/api/cart/items", dependencies=[Depends(require_shopper)])
 async def add_cart_item(body: AddToCartRequest, user: dict = Depends(require_auth)):
     """Add an item to the cart or increase its quantity."""
     pool = get_pool()
@@ -1948,7 +1956,7 @@ async def add_cart_item(body: AddToCartRequest, user: dict = Depends(require_aut
     return {"status": "added", "product_id": body.product_id, "quantity": body.quantity}
 
 
-@router.put("/api/cart/items/{item_id}")
+@router.put("/api/cart/items/{item_id}", dependencies=[Depends(require_shopper)])
 async def update_cart_item(item_id: str, body: UpdateCartItemRequest, user: dict = Depends(require_auth)):
     """Update the quantity of a cart item."""
     pool = get_pool()
@@ -1980,7 +1988,7 @@ async def update_cart_item(item_id: str, body: UpdateCartItemRequest, user: dict
     return {"status": "updated"}
 
 
-@router.delete("/api/cart/items/{item_id}")
+@router.delete("/api/cart/items/{item_id}", dependencies=[Depends(require_shopper)])
 async def remove_cart_item(item_id: str, user: dict = Depends(require_auth)):
     """Remove an item from the cart."""
     pool = get_pool()
@@ -2003,7 +2011,7 @@ async def remove_cart_item(item_id: str, user: dict = Depends(require_auth)):
     return {"status": "removed"}
 
 
-@router.post("/api/cart/coupon")
+@router.post("/api/cart/coupon", dependencies=[Depends(require_shopper)])
 async def apply_coupon(body: ApplyCouponRequest, user: dict = Depends(require_auth)):
     """Validate and apply a coupon code to the cart."""
     pool = get_pool()
@@ -2079,7 +2087,7 @@ async def apply_coupon(body: ApplyCouponRequest, user: dict = Depends(require_au
     }
 
 
-@router.delete("/api/cart/coupon")
+@router.delete("/api/cart/coupon", dependencies=[Depends(require_shopper)])
 async def remove_coupon(user: dict = Depends(require_auth)):
     """Remove the applied coupon from the cart."""
     pool = get_pool()
@@ -2093,7 +2101,7 @@ async def remove_coupon(user: dict = Depends(require_auth)):
     return {"status": "removed"}
 
 
-@router.put("/api/cart/address")
+@router.put("/api/cart/address", dependencies=[Depends(require_shopper)])
 async def update_cart_address(body: CartAddressRequest, user: dict = Depends(require_auth)):
     """Update shipping and/or billing address on the cart."""
     pool = get_pool()
@@ -2133,7 +2141,7 @@ async def update_cart_address(body: CartAddressRequest, user: dict = Depends(req
 # ── Checkout Route ───────────────────────────────────────────
 
 
-@router.post("/api/checkout")
+@router.post("/api/checkout", dependencies=[Depends(require_shopper)])
 async def checkout(body: CheckoutRequest, user: dict = Depends(require_auth)):
     """Process checkout: validate cart, create order, decrement inventory, clear cart.
 
@@ -2183,7 +2191,14 @@ async def _do_checkout(user_id: str, body: CheckoutRequest) -> dict:
                     detail=f"The following products are no longer available: {', '.join(inactive)}",
                 )
 
-            # 4. Check stock for each item
+            # 4. Lock in a stable order before checking stock. Concurrent checkouts
+            # cannot pass the same availability check and then oversell.
+            await conn.fetch(
+                """SELECT product_id, warehouse_id FROM warehouse_inventory
+                   WHERE product_id = ANY($1::uuid[])
+                   ORDER BY product_id, warehouse_id FOR UPDATE""",
+                [item["product_id"] for item in items],
+            )
             for item in items:
                 stock = await conn.fetchval(
                     "SELECT COALESCE(SUM(quantity), 0) FROM warehouse_inventory WHERE product_id = $1",
@@ -2305,26 +2320,31 @@ async def _do_checkout(user_id: str, body: CheckoutRequest) -> dict:
                 order_id,
             )
 
-            # 15. Decrement warehouse inventory
-            for item in items:
+            # 15. Stable product/warehouse lock order avoids cross-cart deadlocks.
+            for item in sorted(items, key=lambda row: str(row["product_id"])):
                 remaining = item["quantity"]
                 warehouses = await conn.fetch(
                     """SELECT warehouse_id, product_id, quantity FROM warehouse_inventory
                        WHERE product_id = $1 AND quantity > 0
-                       ORDER BY quantity DESC""",
+                       ORDER BY quantity DESC, warehouse_id""",
                     str(item["product_id"]),
                 )
                 for wh in warehouses:
                     if remaining <= 0:
                         break
                     deduct = min(remaining, wh["quantity"])
-                    await conn.execute(
-                        "UPDATE warehouse_inventory SET quantity = quantity - $1 WHERE warehouse_id = $2 AND product_id = $3",
-                        deduct,
-                        wh["warehouse_id"],
-                        wh["product_id"],
+                    await change_inventory(
+                        conn,
+                        warehouse_id=wh["warehouse_id"],
+                        product_id=wh["product_id"],
+                        quantity_delta=-deduct,
+                        movement_type="sale",
+                        event_key=f"checkout:{order_id}:{wh['warehouse_id']}:{wh['product_id']}",
+                        order_id=uuid.UUID(str(order_id)),
                     )
                     remaining -= deduct
+                if remaining:
+                    raise HTTPException(status_code=409, detail="Inventory changed; please retry checkout")
 
             # 16. Update user total_spend
             await conn.execute(

@@ -19,14 +19,17 @@ just the in-memory SSE frames.
 
 from __future__ import annotations
 
+import json
 import uuid
+from collections.abc import AsyncIterator
 
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from orchestrator.routes import optional_auth, router
-from shared.context import current_stream_queue, current_user_email, current_user_role
+from shared.context import current_steps, current_stream_queue, current_user_email, current_user_role
+from shared.sse import read_events
 
 
 @pytest.mark.asyncio
@@ -67,6 +70,9 @@ async def test_specialist_delta_preview_is_not_persisted_into_the_final_message(
     )
 
     async def _fake_run_agent_native_stream(agent, message, history=None, metadata_box=None):
+        steps = current_steps.get()
+        assert steps is not None
+        steps.append({"tool_name": "get_sales_history", "status": "success", "duration_ms": 1})
         queue = current_stream_queue.get()
         if queue is not None:
             queue.put_nowait(("delta", "product-discovery", specialist_text))
@@ -94,8 +100,18 @@ async def test_specialist_delta_preview_is_not_persisted_into_the_final_message(
     assert "event: delta" in body
     assert specialist_text.splitlines()[0] in body  # the delta frame's own text reached the wire
 
+    from shared.sse import iter_events
+
+    async def wire_lines() -> AsyncIterator[str]:
+        for line in body.split("\n"):
+            yield line
+
+    frames = [frame async for frame in iter_events(wire_lines())]
+    assert ("delta", specialist_text) in frames
+    assert ("data", orchestrator_text) in frames
+
     row = await clean_db.fetchrow(
-        "SELECT content FROM messages WHERE role = 'assistant' ORDER BY created_at DESC LIMIT 1"
+        "SELECT content,metadata FROM messages WHERE role = 'assistant' ORDER BY created_at DESC LIMIT 1"
     )
     assert row is not None
     persisted = row["content"]
@@ -107,3 +123,14 @@ async def test_specialist_delta_preview_is_not_persisted_into_the_final_message(
     # The card fence appears exactly once in what's actually saved, not
     # twice (once from the specialist's delta, once from the orchestrator).
     assert persisted.count("```product") == 1
+    metadata = json.loads(row["metadata"]) if isinstance(row["metadata"], str) else row["metadata"]
+    assert [step["tool_name"] for step in metadata["steps"]] == ["get_sales_history"]
+
+    async def wire_lines():
+        for line in body.splitlines():
+            yield line
+
+    frames = [frame async for frame in read_events(wire_lines())]
+    final_text = "".join(text for event, text in frames if event == "" and text != "[DONE]")
+    assert final_text == persisted  # Live formatting must match a later reload exactly.
+    assert [text for event, text in frames if event == "delta"] == [specialist_text]

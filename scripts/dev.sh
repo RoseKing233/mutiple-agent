@@ -15,6 +15,16 @@
 
 set -euo pipefail
 
+# Default: migrate/initialize empty DB only. Rebuild requires --reset-data.
+RESET_DATA=false
+prepare_database() {
+    if [ "$RESET_DATA" = true ]; then
+        "${COMPOSE[@]}" --profile seed run --rm seeder uv run --no-project python -m scripts.seed --reset
+    else
+        "${COMPOSE[@]}" --profile seed run --rm seeder
+    fi
+}
+
 # ── Colors ───────────────────────────────────────────────────
 
 RED='\033[0;31m'
@@ -114,6 +124,7 @@ for arg in "$@"; do
     case $arg in
         --clean)      CLEAN=true ;;
         --seed-only)  SEED_ONLY=true ;;
+        --reset-data) RESET_DATA=true ;;
         --infra-only) INFRA_ONLY=true ;;
         --dotnet)     DOTNET=true ;;
         --demo)       DEMO=true ;;
@@ -125,6 +136,7 @@ for arg in "$@"; do
             echo "  --demo        Pull prebuilt images from GHCR instead of building"
             echo "  --clean       Remove volumes and rebuild from scratch"
             echo "  --seed-only   Re-run seeder against existing DB"
+            echo "  --reset-data  Explicitly erase/rebuild business demo data"
             echo "  --infra-only  Start db + redis + aspire only"
             echo "  --dotnet      Target the .NET backend instead of Python"
             echo "  --switch      Tear the other stack down first, volumes and all"
@@ -149,6 +161,10 @@ done
 # is no .NET demo image set, so the combination has no meaning.
 if [ "$DEMO" = true ] && [ "$DOTNET" = true ]; then
     error "--demo and --dotnet cannot be combined (no prebuilt .NET images are published)"
+    exit 1
+fi
+if [ "$DEMO" = true ] && [ "$RESET_DATA" = true ]; then
+    error "--reset-data requires the source-build stack; do not combine it with --demo."
     exit 1
 fi
 
@@ -312,6 +328,9 @@ fi
 if [ "$SEED_ONLY" = true ]; then
     step "Running seeder"
 
+    # Refresh shared modules used by the mounted seed script.
+    "${COMPOSE[@]}" --profile seed build seeder
+
     # Ensure infra is running
     "${COMPOSE[@]}" up -d db redis aspire
     wait_for_health "PostgreSQL" "${COMPOSE[*]} exec db pg_isready -h 127.0.0.1 -U ecommerce -d ecommerce_agents" 60
@@ -319,16 +338,11 @@ if [ "$SEED_ONLY" = true ]; then
 
     # Verify DB credentials work (catches stale volumes)
     if ! "${COMPOSE[@]}" exec -T db sh -c 'PGPASSWORD=ecommerce_secret psql -h 127.0.0.1 -U ecommerce -d ecommerce_agents -c "SELECT 1"' > /dev/null 2>&1; then
-        warn "Database auth failed — stale Docker volume. Reinitializing..."
-        "${COMPOSE[@]}" stop db
-        "${COMPOSE[@]}" rm -f db
-        docker volume ls -q | grep "$PGDATA_VOLUME_PATTERN" | xargs docker volume rm 2>/dev/null || true
-        "${COMPOSE[@]}" up -d db
-        wait_for_health "PostgreSQL" "${COMPOSE[*]} exec db pg_isready -h 127.0.0.1 -U ecommerce -d ecommerce_agents" 60
-        success "Database reinitialized with correct credentials"
+        error "Database credentials do not match. Data was preserved; check credentials or explicitly use --clean."
+        exit 1
     fi
 
-    "${COMPOSE[@]}" --profile seed run --rm seeder
+    prepare_database
     success "Seeder complete"
     exit 0
 fi
@@ -357,13 +371,8 @@ wait_for_health "Redis" "${COMPOSE[*]} exec redis redis-cli ping"
 
 # Verify DB credentials work (catches stale volumes with old passwords)
 if ! "${COMPOSE[@]}" exec -T db sh -c 'PGPASSWORD=ecommerce_secret psql -h 127.0.0.1 -U ecommerce -d ecommerce_agents -c "SELECT 1"' > /dev/null 2>&1; then
-    warn "Database auth failed — stale Docker volume detected. Reinitializing..."
-    "${COMPOSE[@]}" stop db
-    "${COMPOSE[@]}" rm -f db
-    docker volume ls -q | grep "$PGDATA_VOLUME_PATTERN" | xargs docker volume rm 2>/dev/null || true
-    "${COMPOSE[@]}" up -d db
-    wait_for_health "PostgreSQL" "${COMPOSE[*]} exec db pg_isready -h 127.0.0.1 -U ecommerce -d ecommerce_agents" 60
-    success "Database reinitialized with correct credentials"
+    error "Database credentials do not match. Data was preserved; check credentials or explicitly use --clean."
+    exit 1
 fi
 
 # Verify the SCHEMA matches, not just the credentials.
@@ -402,7 +411,7 @@ success "Infrastructure is ready"
 # ── Run Seeder ────────────────────────────────────────────────
 
 step "Running database seeder"
-"${COMPOSE[@]}" --profile seed run --rm seeder
+prepare_database
 success "Database seeded"
 
 # ── Infra Only ────────────────────────────────────────────────

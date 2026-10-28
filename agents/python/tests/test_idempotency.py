@@ -24,6 +24,7 @@ never mock the database. Covers, in order:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -521,6 +522,14 @@ async def test_checkout_double_submit_places_one_order_and_decrements_inventory_
         assert first_resp.status_code == 200
         first = first_resp.json()
 
+        # History must be written with the same transaction as the stock decrement.
+        ledger = await db_pool.fetchrow(
+            """SELECT COUNT(*) AS entries, SUM(quantity_delta) AS delta
+               FROM inventory_movements WHERE order_id=$1 AND movement_type='sale'""",
+            uuid.UUID(first["order_id"]),
+        )
+        assert ledger["entries"] == 1 and ledger["delta"] == -2
+
         # Simulate a client retry after a timeout/network blip — the exact
         # same request body, sent again. The cart is already cleared by the
         # first attempt in real usage, but the idempotency key is computed
@@ -540,6 +549,35 @@ async def test_checkout_double_submit_places_one_order_and_decrements_inventory_
         "SELECT quantity FROM warehouse_inventory WHERE product_id = $1", product_id
     )
     assert remaining_stock == 8, "inventory must be decremented exactly once (10 - 2), not twice"
+
+
+async def test_concurrent_checkouts_cannot_oversell_or_leave_orphan_movements(db_pool: asyncpg.Pool) -> None:
+    from orchestrator.routes import require_auth, router
+
+    user_id = await _seed_user(db_pool, email="concurrent@example.com")
+    product_id = await _seed_product(db_pool)
+    await _seed_cart_with_one_item(db_pool, user_id, product_id)
+    await db_pool.execute("UPDATE warehouse_inventory SET quantity=2 WHERE product_id=$1", product_id)
+
+    async def _fake_auth():
+        return {"sub": "concurrent@example.com", "role": "customer", "user_id": str(user_id)}
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[require_auth] = _fake_auth
+    bodies = [{"shipping_address": {"name": name, "street": "1 Main St", "city": "X", "state": "Y",
+                                    "zip": "00000", "country": "US"}, "billing_same_as_shipping": True}
+              for name in ("A", "B")]
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as http:
+        responses = await asyncio.gather(*[
+            http.post("/api/checkout", json=body, headers={"Authorization": "Bearer fake"}) for body in bodies
+        ])
+    assert sum(r.status_code == 200 for r in responses) == 1
+    assert all(r.status_code in {200, 400, 409} for r in responses)
+    assert await db_pool.fetchval("SELECT COUNT(*) FROM orders") == 1
+    assert await db_pool.fetchval("SELECT quantity FROM warehouse_inventory") == 0
+    assert await db_pool.fetchval("SELECT SUM(quantity_delta) FROM inventory_movements") == 0
+    assert await db_pool.fetchval("SELECT COUNT(*) FROM inventory_movements WHERE movement_type='sale'") == 1
 
 
 async def test_checkout_with_different_body_is_not_deduped(db_pool: asyncpg.Pool) -> None:

@@ -1,12 +1,12 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-    Start the whole E-Commerce Agents stack — the PowerShell twin of dev.sh.
+    Start the whole E-Commerce Agents stack - the PowerShell twin of dev.sh.
 
 .DESCRIPTION
     Behaviourally identical to scripts/dev.sh: same profiles, same ordering,
     same health gates, same flags. It exists because dev.sh is bash, so it
-    cannot run in PowerShell or cmd — and Windows was the one platform with no
+    cannot run in PowerShell or cmd - and Windows was the one platform with no
     first-class way to start this project.
 
     Not Windows-only, though. PowerShell 7 is cross-platform, so this runs on
@@ -42,10 +42,12 @@
 param(
     [switch]$Clean,
     [switch]$SeedOnly,
+    # Explicit demo rebuild. Ordinary startup preserves existing business data.
+    [switch]$ResetData,
     [switch]$InfraOnly,
     [switch]$Dotnet,
     [switch]$Demo,
-    # The VARIABLE cannot be $Switch — that is a reserved automatic variable in
+    # The VARIABLE cannot be $Switch - that is a reserved automatic variable in
     # PowerShell (the switch-statement enumerator), and shadowing it is a real
     # bug waiting. The alias keeps the user-facing flag matching dev.sh's
     # --switch, which is what the repo convention promises.
@@ -56,19 +58,22 @@ param(
 # Stop on the first unhandled error. Native commands don't trip this on their
 # own, so exit codes are checked explicitly via Invoke-Compose below.
 $ErrorActionPreference = 'Stop'
+if ($Demo -and $ResetData) {
+    throw '-ResetData requires the source-build stack; do not combine it with -Demo.'
+}
 
-function Write-Step    { param([string]$Message) Write-Host "`n── $Message ──`n" -ForegroundColor Cyan }
+function Write-Step    { param([string]$Message) Write-Host "`n-- $Message --`n" -ForegroundColor Cyan }
 function Write-Info    { param([string]$Message) Write-Host "[INFO]  $Message" -ForegroundColor Blue }
 function Write-Ok      { param([string]$Message) Write-Host "[OK]    $Message" -ForegroundColor Green }
 function Write-Warn    { param([string]$Message) Write-Host "[WARN]  $Message" -ForegroundColor Yellow }
 function Write-Err     { param([string]$Message) Write-Host "[ERROR] $Message" -ForegroundColor Red }
 
-# ── Stack selection ──────────────────────────────────────────
+# -- Stack selection ------------------------------------------
 # Mirrors dev.sh's COMPOSE / APP_PROFILES / RUN_PROFILES split. Both compose
 # files gate agents, seeder and frontend behind profiles; only db, redis and
 # aspire are unconditional.
-#   AppProfiles — down/build: every profile-gated service, seed included
-#   RunProfiles — final `up -d`: agents + frontend, seed excluded because it
+#   AppProfiles - down/build: every profile-gated service, seed included
+#   RunProfiles - final `up -d`: agents + frontend, seed excluded because it
 #                 already ran as its own one-shot `run --rm` step
 
 if ($Dotnet) {
@@ -104,7 +109,7 @@ function Assert-SingleStack {
 
         What is worth fixing is the failure mode. Without this check the second
         stack fails partway through on a raw Docker port-binding error, after
-        some containers have already started — a half-up mess that neither
+        some containers have already started - a half-up mess that neither
         stack's `down` fully cleans.
 
         Compares compose project labels rather than probing ports: a busy port
@@ -114,7 +119,7 @@ function Assert-SingleStack {
     if ($running.Count -eq 0) { return }
 
     if ($SwitchStack) {
-        Write-Step "Switching stacks — tearing down the $OtherStackName stack"
+        Write-Step "Switching stacks - tearing down the $OtherStackName stack"
         & docker compose -f $OtherStackFile --profile seed --profile agents --profile mcp --profile frontend down -v --remove-orphans *> $null
         Write-Ok "$OtherStackName stack removed, volumes included"
         return
@@ -125,7 +130,7 @@ function Assert-SingleStack {
     Write-Host ''
     Write-Host '  Both stacks publish the same ports, so only one runs at a time.'
     Write-Host ''
-    Write-Host '  Switch cleanly — brings the other down, volumes and all:'
+    Write-Host '  Switch cleanly - brings the other down, volumes and all:'
     Write-Host ''
     Write-Host "    ./scripts/dev.ps1 -SwitchStack"
     Write-Host ''
@@ -147,6 +152,10 @@ function Invoke-Compose {
         [switch]$AllowFailure,
         [switch]$Quiet
     )
+    # Windows PowerShell 5.1 turns redirected native stderr into ErrorRecords.
+    # Compose writes ordinary progress there, so Stop can abort a successful
+    # command before its exit code is checked. Keep this preference local.
+    $ErrorActionPreference = 'Continue'
     $all = $ComposeArgs + $Arguments
     if ($Quiet) {
         & docker @all *> $null
@@ -157,7 +166,7 @@ function Invoke-Compose {
         throw "docker $($all -join ' ') failed with exit code $LASTEXITCODE"
     }
     # Deliberately returns nothing. An uncaptured value here would be written to
-    # the success stream and print as a bare exit code between steps — caught by
+    # the success stream and print as a bare exit code between steps - caught by
     # running this for real, where a stray "0" appeared above "Seeder complete".
 }
 
@@ -167,6 +176,7 @@ function Wait-ForHealth {
         [Parameter(Mandatory)][string[]]$Probe,
         [int]$TimeoutSeconds = 60
     )
+    $ErrorActionPreference = 'Continue'
     Write-Info "Waiting for $Name..."
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while ((Get-Date) -lt $deadline) {
@@ -202,29 +212,28 @@ function Wait-ForHttp {
     throw "$Name did not respond at $Url within ${TimeoutSeconds}s"
 }
 
-function Repair-StaleDatabaseVolume {
+function Assert-DatabaseCredentials {
     <#
         A pgdata volume left over from an older run keeps its original password,
         so the container starts healthy but every connection is rejected. dev.sh
-        carries the same recovery; without it the seeder fails with an
-        authentication error that looks like a config problem.
+        uses the same check. Authentication errors preserve the volume and stop
+        startup, rather than automatically deleting existing business data.
     #>
-    $probe = @('exec', '-T', 'db', 'sh', '-c',
-               'PGPASSWORD=ecommerce_secret psql -h 127.0.0.1 -U ecommerce -d ecommerce_agents -c "SELECT 1"')
+    $ErrorActionPreference = 'Continue'
+    $probe = @('exec', '-T', '-e', 'PGPASSWORD=ecommerce_secret', 'db',
+               'psql', '-h', '127.0.0.1', '-U', 'ecommerce', '-d', 'ecommerce_agents', '-c', 'SELECT 1')
     & docker @($ComposeArgs + $probe) *> $null
     if ($LASTEXITCODE -eq 0) { return }
 
-    Write-Warn 'Database auth failed — stale Docker volume detected. Reinitializing...'
-    Invoke-Compose -Arguments @('stop', 'db') -AllowFailure -Quiet
-    Invoke-Compose -Arguments @('rm', '-f', 'db') -AllowFailure -Quiet
+    throw 'Database credentials do not match. Existing data was preserved. Check credentials; use -Clean only for an intentional volume reset.'
+}
 
-    $volumes = (& docker volume ls -q) | Where-Object { $_ -match $PgDataVolumeRegex }
-    foreach ($volume in $volumes) { & docker volume rm $volume *> $null }
-
-    Invoke-Compose -Arguments @('up', '-d', 'db')
-    Wait-ForHealth -Name 'PostgreSQL' -TimeoutSeconds 60 -Probe @(
-        'exec', 'db', 'pg_isready', '-h', '127.0.0.1', '-U', 'ecommerce', '-d', 'ecommerce_agents')
-    Write-Ok 'Database reinitialized with correct credentials'
+function Invoke-DatabasePreparation {
+    $seedArguments = @('--profile', 'seed', 'run', '--rm', 'seeder')
+    if ($ResetData) {
+        $seedArguments += @('uv', 'run', '--no-project', 'python', '-m', 'scripts.seed', '--reset')
+    }
+    Invoke-Compose -Arguments $seedArguments
 }
 
 function Assert-DatabaseSchema {
@@ -234,25 +243,31 @@ function Assert-DatabaseSchema {
 
         .DESCRIPTION
         A volume can authenticate perfectly and still carry a schema from before
-        the last init.sql change. That is the more common way to land here —
+        the last init.sql change. That is the more common way to land here -
         pulling new commits and restarting the same stack, rather than switching
-        stacks — and it is nastier than an auth failure, because nothing errors.
+        stacks - and it is nastier than an auth failure, because nothing errors.
         Search quietly returns nothing and the agent says "I couldn't find any",
         which reads like an empty catalogue rather than a broken index.
 
         products.search_vector is the canary: it arrived with the v1.2.0
         full-text search work, so any volume predating that lacks it. Hardcoded
-        on purpose — deriving the check from init.sql would be clever and would
+        on purpose - deriving the check from init.sql would be clever and would
         drift.
     #>
-    $query = "SELECT 1 FROM information_schema.columns WHERE table_name = 'products' AND column_name = 'search_vector'"
-    $probe = @('exec', '-T', 'db', 'sh', '-c',
-               "PGPASSWORD=ecommerce_secret psql -h 127.0.0.1 -U ecommerce -d ecommerce_agents -tAc `"$query`"")
-    $result = & docker @($ComposeArgs + $probe) 2>$null
-    if ($result -match '1') { return }
+    $ErrorActionPreference = 'Continue'
+    $query = "SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'products' AND column_name = 'search_vector';"
+    $probe = @('exec', '-T', '-e', 'PGPASSWORD=ecommerce_secret', 'db',
+               'psql', '-h', '127.0.0.1', '-U', 'ecommerce', '-d', 'ecommerce_agents',
+               '-At', '-v', 'ON_ERROR_STOP=1')
+    # SQL through stdin avoids a second shell and nested quote parsing in 5.1.
+    $result = $query | & docker @($ComposeArgs + $probe) 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Database schema check failed: $($result -join ' ')"
+    }
+    if (@($result | Where-Object { $_.ToString().Trim() -eq '1' }).Count -gt 0) { return }
 
     Write-Host ''
-    Write-Warn 'Database schema is out of date — products.search_vector is missing.'
+    Write-Warn 'Database schema is out of date - products.search_vector is missing.'
     Write-Host ''
     Write-Host '  Your Postgres volume predates the full-text search change. The stack will'
     Write-Host '  start and look healthy, and every product search will silently return'
@@ -263,8 +278,8 @@ function Assert-DatabaseSchema {
     Write-Host '    Recreate the volume (loses local data, reseeds from scratch):'
     Write-Host '      ./scripts/dev.ps1 -Clean'
     Write-Host ''
-    Write-Host '    Or apply the schema in place, keeping your data:'
-    Write-Host '      docker compose exec -T db psql -U ecommerce -d ecommerce_agents < docker/postgres/init.sql'
+    Write-Host '    Or add the missing generated search column and GIN index in place.'
+    Write-Host '    See docs/sales-analysis/README.md for the data-preserving SQL.'
     Write-Host ''
     exit 1
 }
@@ -272,7 +287,7 @@ function Assert-DatabaseSchema {
 function Show-Summary {
     Write-Host ''
     Write-Host '============================================================' -ForegroundColor Cyan
-    Write-Host "  E-Commerce Agents — $StackName stack" -ForegroundColor Cyan
+    Write-Host "  E-Commerce Agents - $StackName stack" -ForegroundColor Cyan
     Write-Host '============================================================' -ForegroundColor Cyan
     Write-Host ''
     Write-Host '  Web app          http://localhost:3000'
@@ -285,11 +300,11 @@ function Show-Summary {
     Write-Host ''
 }
 
-# ── Run from the repository root, wherever the script was invoked from ──
+# -- Run from the repository root, wherever the script was invoked from --
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 Push-Location $RepoRoot
 try {
-    # ── Prerequisites ────────────────────────────────────────
+    # -- Prerequisites ----------------------------------------
     if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
         Write-Err 'Docker is not installed or not on PATH.'
         Write-Err 'On Windows, install Docker Desktop and make sure it is running.'
@@ -301,27 +316,27 @@ try {
         exit 1
     }
 
-    # ── .env ─────────────────────────────────────────────────
+    # -- .env -------------------------------------------------
     if (-not (Test-Path '.env')) {
         if (Test-Path '.env.example') {
             Copy-Item '.env.example' '.env'
-            Write-Warn 'Created .env from .env.example — edit it and add your API key before the agents will answer.'
+            Write-Warn 'Created .env from .env.example - edit it and add your API key before the agents will answer.'
         } else {
             Write-Err 'No .env or .env.example found. Create a .env file first.'
             exit 1
         }
     }
 
-    # ── Clean ────────────────────────────────────────────────
+    # -- Clean ------------------------------------------------
     if ($Clean) {
         Write-Step 'Cleaning up (removing containers, volumes, orphans)'
         Invoke-Compose -Arguments ($AppProfiles + @('down', '-v', '--remove-orphans')) -AllowFailure
         # Aspire holds telemetry in memory only; removing the container clears it.
         Invoke-Compose -Arguments @('rm', '-f', 'aspire') -AllowFailure -Quiet
-        Write-Ok 'Clean complete — containers, volumes and Aspire telemetry cleared'
+        Write-Ok 'Clean complete - containers, volumes and Aspire telemetry cleared'
     }
 
-    # ── Demo mode ────────────────────────────────────────────
+    # -- Demo mode --------------------------------------------
     # Mirrors dev.sh's --demo: a self-contained fast path with its own exit
     # rather than conditionals threaded through the build/seed/up flow. There
     # is no build step, docker-compose.demo.yml carries no profiles, and its
@@ -330,7 +345,7 @@ try {
     if ($Demo) {
         $tag = if ($env:IMAGE_TAG) { $env:IMAGE_TAG } else { 'latest' }
         $env:IMAGE_TAG = $tag
-        Write-Step "Demo mode — pulling prebuilt images (tag: $tag)"
+        Write-Step "Demo mode - pulling prebuilt images (tag: $tag)"
         Write-Info 'No local build. Images come from ghcr.io/nitin27may/e-commerce-agents'
 
         & docker compose -f docker-compose.demo.yml pull
@@ -340,7 +355,7 @@ try {
             Write-Host '  Most likely causes:'
             Write-Host '    - The tag does not exist yet.'
             Write-Host '    - A package is still private. Anonymous pulls fail with an auth'
-            Write-Host '      error that reads like a network problem — see docs/releasing.md.'
+            Write-Host '      error that reads like a network problem - see docs/releasing.md.'
             Write-Host ''
             Write-Host '  To build from source instead, drop the -Demo switch:'
             Write-Host '    ./scripts/dev.ps1'
@@ -361,28 +376,30 @@ try {
         exit 0
     }
 
-    # ── Seed only ────────────────────────────────────────────
+    # -- Seed only --------------------------------------------
     if ($SeedOnly) {
         Write-Step 'Running seeder'
         Assert-SingleStack
+        # The mounted seed script imports shared code from the image; refresh both together.
+        Invoke-Compose -Arguments @('--profile', 'seed', 'build', 'seeder')
         Invoke-Compose -Arguments @('up', '-d', 'db', 'redis', 'aspire')
         Wait-ForHealth -Name 'PostgreSQL' -TimeoutSeconds 60 -Probe @(
             'exec', 'db', 'pg_isready', '-h', '127.0.0.1', '-U', 'ecommerce', '-d', 'ecommerce_agents')
         Wait-ForHealth -Name 'Redis' -Probe @('exec', 'redis', 'redis-cli', 'ping')
-        Repair-StaleDatabaseVolume
+        Assert-DatabaseCredentials
         Assert-DatabaseSchema
-        Invoke-Compose -Arguments @('--profile', 'seed', 'run', '--rm', 'seeder')
+        Invoke-DatabasePreparation
         Write-Ok 'Seeder complete'
         exit 0
     }
 
     Assert-SingleStack
 
-    # ── Stop existing ────────────────────────────────────────
+    # -- Stop existing ----------------------------------------
     Write-Step 'Stopping existing containers'
     Invoke-Compose -Arguments ($AppProfiles + @('down', '--remove-orphans')) -AllowFailure -Quiet
 
-    # ── Build ────────────────────────────────────────────────
+    # -- Build ------------------------------------------------
     Write-Step 'Building images'
     if ($Clean) {
         Invoke-Compose -Arguments ($AppProfiles + @('build', '--no-cache'))
@@ -390,28 +407,28 @@ try {
         Invoke-Compose -Arguments ($AppProfiles + @('build'))
     }
 
-    # ── Infrastructure ───────────────────────────────────────
+    # -- Infrastructure ---------------------------------------
     Write-Step 'Starting infrastructure (db, redis, aspire)'
     Invoke-Compose -Arguments @('up', '-d', 'db', 'redis', 'aspire')
     Wait-ForHealth -Name 'PostgreSQL' -TimeoutSeconds 60 -Probe @(
         'exec', 'db', 'pg_isready', '-h', '127.0.0.1', '-U', 'ecommerce', '-d', 'ecommerce_agents')
     Wait-ForHealth -Name 'Redis' -Probe @('exec', 'redis', 'redis-cli', 'ping')
-    Repair-StaleDatabaseVolume
+    Assert-DatabaseCredentials
     Assert-DatabaseSchema
     Write-Ok 'Infrastructure is ready'
 
-    # ── Seed ─────────────────────────────────────────────────
+    # -- Seed -------------------------------------------------
     Write-Step 'Running database seeder'
-    Invoke-Compose -Arguments @('--profile', 'seed', 'run', '--rm', 'seeder')
+    Invoke-DatabasePreparation
     Write-Ok 'Database seeded'
 
     if ($InfraOnly) {
         Show-Summary
-        Write-Ok 'Infrastructure-only mode — agents not started'
+        Write-Ok 'Infrastructure-only mode - agents not started'
         exit 0
     }
 
-    # ── Agents and frontend ──────────────────────────────────
+    # -- Agents and frontend ----------------------------------
     Write-Step 'Starting agents and frontend'
     Invoke-Compose -Arguments ($RunProfiles + @('up', '-d'))
 

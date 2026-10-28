@@ -18,12 +18,14 @@ from shared.config import _resolve_repo_root
 
 def test_resolves_three_levels_up_on_the_host_layout() -> None:
     # <repo>/agents/python/shared/config.py -> <repo>
-    host_path = Path("/home/user/e-commerce-agents/agents/python/shared/config.py")
-    assert _resolve_repo_root(host_path) == Path("/home/user/e-commerce-agents")
+    root = Path(Path.cwd().anchor)
+    host_path = root / "home/user/e-commerce-agents/agents/python/shared/config.py"
+    assert _resolve_repo_root(host_path) == root / "home/user/e-commerce-agents"
 
 
 def test_falls_back_to_the_immediate_parent_on_the_shallow_docker_layout() -> None:
     # /app/shared/config.py -> only 2 real parents (/app, /) — parents[3]
     # would raise IndexError; must fall back instead of crashing.
-    docker_path = Path("/app/shared/config.py")
-    assert _resolve_repo_root(docker_path) == Path("/app/shared")
+    root = Path(Path.cwd().anchor)
+    docker_path = root / "app/shared/config.py"
+    assert _resolve_repo_root(docker_path) == root / "app/shared"

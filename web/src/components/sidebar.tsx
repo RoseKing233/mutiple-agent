@@ -70,7 +70,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
 
   const isSeller = user?.role === "seller" || isAdmin;
-  const groups = visibleGroups({ isAdmin, isSeller });
+  const groups = visibleGroups({ isAdmin, isSeller, isManager: user?.role === "store_manager" });
 
   // Only the most specific matching item is active, so a parent route like
   // /admin doesn't also light up while on /admin/usage.

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { CartProvider } from "@/lib/cart-context";
 import { DesktopSidebar, MobileSidebar } from "@/components/sidebar";
@@ -11,12 +11,15 @@ import { CommandPalette } from "@/components/command-palette";
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth();
   const router = useRouter();
+  const pathname = usePathname();
+  const managerShoppingPath = user?.role === "store_manager" && ["/home", "/cart", "/checkout", "/orders"].some((p) => pathname === p || pathname.startsWith(`${p}/`));
 
   useEffect(() => {
     if (!isLoading && !user) {
       router.replace("/login");
     }
-  }, [user, isLoading, router]);
+    if (managerShoppingPath) router.replace("/analysis");
+  }, [user, isLoading, router, managerShoppingPath]);
 
   // Show nothing while checking auth state
   if (isLoading) {
@@ -28,7 +31,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }
 
   // Don't render the app shell until we confirm the user is authenticated
-  if (!user) {
+  if (!user || managerShoppingPath) {
     return null;
   }
 

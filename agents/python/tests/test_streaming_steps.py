@@ -35,7 +35,6 @@ from shared.context import (
     current_user_role,
 )
 
-
 # ─────────────────────── helpers ────────────────────────────────────────────
 
 
@@ -201,7 +200,7 @@ async def test_message_stream_no_steps_skips_step_frames(
     from shared.agent_host import create_agent_app
 
     async def _fake_stream(agent, message, history=None):
-        yield "simple answer"
+        yield "simple\n\nanswer\n"
 
     monkeypatch.setattr("shared.agent_host._run_agent_native_stream", _fake_stream)
     monkeypatch.setattr(
@@ -224,6 +223,7 @@ async def test_message_stream_no_steps_skips_step_frames(
         )
 
     assert "event: step" not in resp.text
+    assert "data: simple\ndata: \ndata: answer\ndata: \n\n" in resp.text
     assert "data: [DONE]" in resp.text
 
 
@@ -272,6 +272,10 @@ async def test_streaming_path_merges_specialist_steps(
     }
     sse_lines = [
         "data: Here are the headphones",
+        "data: ",
+        "data: ```product",
+        'data: {"name":"Sony"}',
+        "data: ```",
         "",
         "event: step",
         f"data: {json.dumps(specialist_step)}",
@@ -302,6 +306,7 @@ async def test_streaming_path_merges_specialist_steps(
         )
 
     assert "Here are the headphones" in result
+    assert '\n\n```product\n{"name":"Sony"}\n```' in result
     assert len(steps_bucket) == 1
     assert steps_bucket[0]["tool_name"] == "search_products"
     assert steps_bucket[0]["agent"] == "product-discovery"

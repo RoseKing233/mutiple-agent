@@ -8,8 +8,10 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { formatPrice } from "@/lib/format";
 import { productImageUrl } from "@/lib/images";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { RecommendationPanel } from "@/components/products/recommendation-panel";
+import { ProductOptions } from "@/components/products/product-options";
 
 interface ProductDetail {
   id: string;
@@ -23,6 +25,7 @@ interface ProductDetail {
   rating?: number | null;
   review_count?: number | null;
   in_stock?: boolean;
+  specs?: Record<string, unknown>;
 }
 
 export default function ProductDetailPage() {
@@ -130,7 +133,7 @@ export default function ProductDetailPage() {
               )}
 
               <div className="mt-6 flex flex-wrap gap-3">
-                <Button
+                {user?.role === "store_manager" ? <Button size="lg" render={<Link href={`/products/${id}`} />}>View inventory and sales</Button> : <Button
                   size="lg"
                   onClick={addToCart}
                   disabled={adding || product.in_stock === false}
@@ -144,18 +147,13 @@ export default function ProductDetailPage() {
                   ) : (
                     "Sign in to buy"
                   )}
-                </Button>
-                <Button
-                  render={
-                    <Link
-                      href={`/shop/assistant?prompt=${encodeURIComponent(`Tell me more about ${product.name}`)}`}
-                    />
-                  }
-                  variant="outline"
-                  size="lg"
+                </Button>}
+                <Link
+                  href={`/shop/assistant?prompt=${encodeURIComponent(`Tell me more about ${product.name}`)}`}
+                  className={buttonVariants({ variant: "outline", size: "lg" })}
                 >
                   <Sparkles className="size-4 text-primary" /> Ask the assistant
-                </Button>
+                </Link>
               </div>
             </>
           ) : (
@@ -168,6 +166,10 @@ export default function ProductDetailPage() {
           )}
         </div>
       </div>
+      {product && <>
+        <ProductOptions specs={product.specs} />
+        <RecommendationPanel key={product.id} productId={product.id} />
+      </>}
     </div>
   );
 }
