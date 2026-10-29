@@ -2376,22 +2376,24 @@ async def update_cart_address(body: CartAddressRequest, user: dict = Depends(req
 
 
 @router.post("/api/checkout", dependencies=[Depends(require_shopper)])
-async def checkout(body: CheckoutRequest, user: dict = Depends(require_auth)):
+async def checkout(body: CheckoutRequest, request: Request, user: dict = Depends(require_auth)):
     """Process checkout: validate cart, create order, decrement inventory, clear cart.
 
-    Delegates to ``_do_checkout``, which is idempotency-wrapped per
-    (user_id, request body) — a double-submit (double-click, a client
-    retrying after a timeout that the server actually completed) replays
-    the first attempt's order instead of placing a second one and
-    decrementing inventory twice. A genuinely new checkout (different cart
-    contents, different address) hashes differently and is not deduped.
+    The client reuses its Idempotency-Key when retrying the same attempt and
+    creates a new key for a new checkout. Without a supplied key, this request
+    is treated as a new attempt.
     """
     user_id = user.get("user_id", "")
-    return await _do_checkout(user_id, body)
+    checkout_attempt_id = request.headers.get("Idempotency-Key", "").strip()
+    if not checkout_attempt_id:
+        checkout_attempt_id = str(uuid.uuid4())
+    elif len(checkout_attempt_id) > 200:
+        raise HTTPException(status_code=400, detail="Idempotency-Key must be 200 characters or fewer")
+    return await _do_checkout(user_id, body, checkout_attempt_id)
 
 
-@idempotent("checkout", identity_fn=lambda user_id, body: user_id)
-async def _do_checkout(user_id: str, body: CheckoutRequest) -> dict:
+@idempotent("checkout", identity_fn=lambda user_id, body, checkout_attempt_id: user_id)
+async def _do_checkout(user_id: str, body: CheckoutRequest, checkout_attempt_id: str) -> dict:
     pool = get_pool()
 
     async with pool.acquire() as conn:

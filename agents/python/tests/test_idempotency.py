@@ -674,7 +674,11 @@ async def test_checkout_double_submit_places_one_order_and_decrements_inventory_
         "billing_same_as_shipping": True,
     }
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as http:
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers={"Idempotency-Key": str(uuid.uuid4())},
+    ) as http:
         first_resp = await http.post("/api/checkout", json=body, headers={"Authorization": "Bearer fake"})
         assert first_resp.status_code == 200
         first = first_resp.json()
@@ -687,12 +691,7 @@ async def test_checkout_double_submit_places_one_order_and_decrements_inventory_
         )
         assert ledger["entries"] == 1 and ledger["delta"] == -2
 
-        # Simulate a client retry after a timeout/network blip — the exact
-        # same request body, sent again. The cart is already cleared by the
-        # first attempt in real usage, but the idempotency key is computed
-        # from the ORIGINAL request args (user_id, body), not the cart's
-        # current state, so this must replay rather than 400 on "No cart
-        # found" or (worse, if the cart existed) place a second order.
+        # A retry of the same checkout attempt reuses its idempotency key.
         second_resp = await http.post("/api/checkout", json=body, headers={"Authorization": "Bearer fake"})
         assert second_resp.status_code == 200
         second = second_resp.json()
@@ -706,6 +705,68 @@ async def test_checkout_double_submit_places_one_order_and_decrements_inventory_
         "SELECT quantity FROM warehouse_inventory WHERE product_id = $1", product_id
     )
     assert remaining_stock == 8, "inventory must be decremented exactly once (10 - 2), not twice"
+
+
+async def test_checkout_new_attempt_does_not_replay_cancelled_order(
+    db_pool: asyncpg.Pool,
+) -> None:
+    from orchestrator.routes import require_auth, router
+
+    user_id = await _seed_user(db_pool, email="checkout-again@example.com")
+    product_id = await _seed_product(db_pool, price=25.0)
+    await _seed_cart_with_one_item(db_pool, user_id, product_id)
+
+    async def _fake_auth():
+        return {"sub": "checkout-again@example.com", "role": "customer", "user_id": str(user_id)}
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[require_auth] = _fake_auth
+    body = {
+        "shipping_address": {
+            "name": "A",
+            "street": "1 Main St",
+            "city": "X",
+            "state": "Y",
+            "zip": "00000",
+            "country": "US",
+        },
+        "billing_same_as_shipping": True,
+    }
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as http:
+        first_response = await http.post(
+            "/api/checkout",
+            json=body,
+            headers={"Authorization": "******", "Idempotency-Key": str(uuid.uuid4())},
+        )
+        assert first_response.status_code == 200
+        cancelled_order_id = uuid.UUID(first_response.json()["order_id"])
+
+        from order_management.tools import cancel_order
+
+        current_user_email.set("checkout-again@example.com")
+        current_user_role.set("customer")
+        cancel_result = await cancel_order(order_id=str(cancelled_order_id), reason="Changed my mind")
+        assert cancel_result["new_status"] == "cancelled"
+        cart_id = await db_pool.fetchval("SELECT id FROM carts WHERE user_id = $1", user_id)
+        await db_pool.execute(
+            "INSERT INTO cart_items (cart_id, product_id, quantity) VALUES ($1, $2, 2)",
+            cart_id,
+            product_id,
+        )
+
+        second_response = await http.post(
+            "/api/checkout",
+            json=body,
+            headers={"Authorization": "******", "Idempotency-Key": str(uuid.uuid4())},
+        )
+        assert second_response.status_code == 200
+        new_order_id = uuid.UUID(second_response.json()["order_id"])
+
+    assert new_order_id != cancelled_order_id
+    assert await db_pool.fetchval("SELECT status FROM orders WHERE id = $1", cancelled_order_id) == "cancelled"
+    assert await db_pool.fetchval("SELECT status FROM orders WHERE id = $1", new_order_id) == "placed"
 
 
 async def test_concurrent_checkouts_cannot_oversell_or_leave_orphan_movements(db_pool: asyncpg.Pool) -> None:

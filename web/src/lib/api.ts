@@ -857,7 +857,7 @@ class ApiClient {
     billing_address?: Address | null;
     billing_same_as_shipping?: boolean;
     payment_method?: string;
-  }) {
+  }, idempotencyKey: string) {
     return this.request<{
       order_id: string;
       total: number;
@@ -867,6 +867,7 @@ class ApiClient {
       carrier: string;
     }>("/api/checkout", {
       method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
       body: JSON.stringify(data),
     });
   }

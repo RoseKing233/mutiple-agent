@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { useCart } from "@/lib/cart-context";
@@ -182,6 +182,7 @@ export default function CheckoutPage() {
   // Checkout state
   const [placing, setPlacing] = useState(false);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  const checkoutIdempotencyKey = useRef<string | null>(null);
 
   // Load cart on mount
   const loadCart = useCallback(async () => {
@@ -273,14 +274,17 @@ export default function CheckoutPage() {
             phone: billing.phone || undefined,
           };
 
+      const idempotencyKey = checkoutIdempotencyKey.current ?? crypto.randomUUID();
+      checkoutIdempotencyKey.current = idempotencyKey;
       const result = await api.checkout({
         shipping_address: shippingAddr,
         billing_address: billingAddr,
         billing_same_as_shipping: billingSame,
-      });
+      }, idempotencyKey);
 
       // Refresh the cart context (cart is now empty)
       await refreshCart();
+      checkoutIdempotencyKey.current = null;
       toastOrderPlaced(result.order_id);
       router.push(`/orders/${result.order_id}?placed=true`);
     } catch (err) {
