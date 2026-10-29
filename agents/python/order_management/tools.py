@@ -11,6 +11,7 @@ from pydantic import Field, ValidationError
 from shared.context import current_user_email
 from shared.db import get_pool
 from shared.guardrails.roles import requires_role
+from shared.inventory_ledger import release_cancelled_order_inventory
 from shared.tool_inputs import (
     CancelOrderInput,
     ModifyOrderInput,
@@ -277,6 +278,10 @@ async def cancel_order(
                    VALUES ($1, 'cancelled', $2)""",
                 order_id, f"Cancelled by customer: {reason}",
             )
+            inventory_released = await release_cancelled_order_inventory(
+                conn,
+                order_id=order["id"],
+            )
 
             return {
                 "order_id": str(order["id"]),
@@ -284,7 +289,13 @@ async def cancel_order(
                 "new_status": "cancelled",
                 "reason": reason,
                 "refund_amount": float(order["total"]),
-                "message": f"Order cancelled successfully. A refund of ${float(order['total']):.2f} will be processed within 5-7 business days.",
+                "refund_status": "not_processed",
+                "refund_mode": "not_connected",
+                "inventory_released_units": inventory_released,
+                "message": (
+                    "Order cancelled successfully. This demo checkout is not connected "
+                    "to a payment provider, so no real refund has been issued."
+                ),
             }
 
 

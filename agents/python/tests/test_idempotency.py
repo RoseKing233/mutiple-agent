@@ -245,12 +245,30 @@ async def test_initiate_return_retry_replays_the_original_return_instead_of_erro
     assert count == 1, "only one returns row may exist no matter how many times the identical call retries"
 
 
+async def test_initiate_return_rejects_order_outside_the_return_window(db_pool: asyncpg.Pool) -> None:
+    from shared.tools.return_tools import initiate_return
+
+    user_id = await _seed_user(db_pool, email="expired-return@example.com")
+    order_id = await _seed_order(db_pool, user_id, status="delivered", total=50.0)
+    await db_pool.execute(
+        "UPDATE orders SET created_at = NOW() - INTERVAL '31 days' WHERE id = $1",
+        order_id,
+    )
+    current_user_email.set("expired-return@example.com")
+
+    result = await initiate_return(order_id=str(order_id), reason="wrong size")
+
+    assert result["eligible"] is False
+    count = await db_pool.fetchval("SELECT COUNT(*) FROM returns WHERE order_id = $1", order_id)
+    assert count == 0
+
+
 async def test_process_refund_retry_replays_the_original_refund_instead_of_erroring(db_pool: asyncpg.Pool) -> None:
     from shared.tools.return_tools import process_refund
 
     user_id = await _seed_user(db_pool, email="refund-retry@example.com")
     order_id = await _seed_order(db_pool, user_id, status="returned", total=75.0)
-    return_id = await _seed_return(db_pool, order_id, user_id, status="requested", refund_amount=75.0)
+    return_id = await _seed_return(db_pool, order_id, user_id, status="received", refund_amount=75.0)
     current_user_email.set("refund-retry@example.com")
     current_user_role.set("customer")
 
@@ -262,6 +280,47 @@ async def test_process_refund_retry_replays_the_original_refund_instead_of_error
 
     row = await db_pool.fetchrow("SELECT status FROM returns WHERE id = $1", return_id)
     assert row["status"] == "refunded"
+
+
+async def test_process_refund_refuses_before_return_is_received(db_pool: asyncpg.Pool) -> None:
+    from shared.tools.return_tools import process_refund
+
+    user_id = await _seed_user(db_pool, email="refund-early@example.com")
+    order_id = await _seed_order(db_pool, user_id, status="returned", total=75.0)
+    return_id = await _seed_return(db_pool, order_id, user_id, status="requested", refund_amount=75.0)
+    current_user_email.set("refund-early@example.com")
+    current_user_role.set("customer")
+
+    result = await process_refund(return_id=str(return_id))
+
+    assert "error" in result
+    assert result["current_status"] == "requested"
+    await db_pool.execute("UPDATE returns SET status = 'received' WHERE id = $1", return_id)
+    retry = await process_refund(return_id=str(return_id))
+    assert retry["status"] == "refunded", "a state-corrected retry must not replay the earlier business error"
+    status = await db_pool.fetchval("SELECT status FROM returns WHERE id = $1", return_id)
+    assert status == "refunded"
+
+
+async def test_denied_return_revokes_existing_label(db_pool: asyncpg.Pool) -> None:
+    from fastapi import HTTPException
+
+    from orchestrator.routes.legacy import ReturnStatusRequest, get_return_label, update_admin_return_status
+
+    user_id = await _seed_user(db_pool, email="denied-label@example.com")
+    order_id = await _seed_order(db_pool, user_id, status="returned", total=25.0)
+    return_id = await _seed_return(db_pool, order_id, user_id, status="requested", refund_amount=25.0)
+    label_url = "/api/returns/oldtoken1234/label"
+    await db_pool.execute("UPDATE returns SET return_label_url = $2 WHERE id = $1", return_id, label_url)
+
+    result = await update_admin_return_status(str(return_id), ReturnStatusRequest(status="denied"))
+
+    assert result["status"] == "denied"
+    assert await db_pool.fetchval("SELECT return_label_url FROM returns WHERE id = $1", return_id) is None
+    await db_pool.execute("UPDATE returns SET return_label_url = $2 WHERE id = $1", return_id, label_url)
+    with pytest.raises(HTTPException) as exc_info:
+        await get_return_label("oldtoken1234")
+    assert exc_info.value.status_code == 404
 
 
 # ─────────────────────── 3. hitl.py fail-closed ───────────────────────────
@@ -319,7 +378,7 @@ async def test_execute_approved_action_process_refund_operates_on_the_real_retur
 
     user_id = await _seed_user(db_pool, email="admin-approve@example.com")
     order_id = await _seed_order(db_pool, user_id, status="returned", total=42.0)
-    return_id = await _seed_return(db_pool, order_id, user_id, status="requested", refund_amount=42.0)
+    return_id = await _seed_return(db_pool, order_id, user_id, status="received", refund_amount=42.0)
 
     result = await execute_approved_action(
         tool_name="process_refund",
@@ -329,6 +388,7 @@ async def test_execute_approved_action_process_refund_operates_on_the_real_retur
 
     assert result["success"] is True
     assert result["refunded_amount"] == 42.0
+    assert result["refund_mode"] == "simulated"
     row = await db_pool.fetchrow("SELECT status FROM returns WHERE id = $1", return_id)
     assert row["status"] == "refunded"
 
@@ -340,7 +400,7 @@ async def test_execute_approved_action_process_refund_is_guarded_against_double_
 
     user_id = await _seed_user(db_pool, email="admin-double@example.com")
     order_id = await _seed_order(db_pool, user_id, status="returned", total=15.0)
-    return_id = await _seed_return(db_pool, order_id, user_id, status="requested", refund_amount=15.0)
+    return_id = await _seed_return(db_pool, order_id, user_id, status="received", refund_amount=15.0)
 
     first = await execute_approved_action(
         tool_name="process_refund",
@@ -352,8 +412,8 @@ async def test_execute_approved_action_process_refund_is_guarded_against_double_
     # A second execution against the exact same args, bypassing the
     # idempotency decorator (as could happen via a distinct HITL request
     # for the same return), must still not report a second success — the
-    # WHERE status NOT IN ('refunded', 'denied') guard on the UPDATE
-    # itself is the defense-in-depth layer for that case.
+    # WHERE status = 'received' guard on the UPDATE itself is the
+    # defense-in-depth layer for that case.
     from shared.idempotency import _canonical_key
 
     key = _canonical_key(
@@ -373,6 +433,34 @@ async def test_execute_approved_action_process_refund_is_guarded_against_double_
         user_email="admin-double@example.com",
     )
     assert second["success"] is False
+
+
+async def test_hitl_refund_approval_refuses_unreceived_return(db_pool: asyncpg.Pool) -> None:
+    from shared.hitl import execute_approved_action
+
+    user_id = await _seed_user(db_pool, email="early-hitl-refund@example.com")
+    order_id = await _seed_order(db_pool, user_id, status="returned", total=15.0)
+    return_id = await _seed_return(db_pool, order_id, user_id, status="approved", refund_amount=15.0)
+
+    result = await execute_approved_action(
+        tool_name="process_refund",
+        tool_input={"return_id": str(return_id)},
+        user_email="early-hitl-refund@example.com",
+    )
+
+    assert result["success"] is False
+    status = await db_pool.fetchval("SELECT status FROM returns WHERE id = $1", return_id)
+    assert status == "approved"
+    await db_pool.execute("UPDATE returns SET status = 'received' WHERE id = $1", return_id)
+
+    retry = await execute_approved_action(
+        tool_name="process_refund",
+        tool_input={"return_id": str(return_id)},
+        user_email="early-hitl-refund@example.com",
+    )
+    assert retry["success"] is True, "an identical HITL retry must run again after the return is received"
+    status = await db_pool.fetchval("SELECT status FROM returns WHERE id = $1", return_id)
+    assert status == "refunded"
 
 
 async def test_execute_approved_action_initiate_return_does_not_create_a_duplicate_row(db_pool: asyncpg.Pool) -> None:
@@ -411,6 +499,75 @@ async def test_execute_approved_action_initiate_return_does_not_create_a_duplica
 
     count = await db_pool.fetchval("SELECT COUNT(*) FROM returns WHERE order_id = $1", order_id)
     assert count == 1
+
+
+async def test_hitl_return_approval_rechecks_the_return_window(db_pool: asyncpg.Pool) -> None:
+    from shared.hitl import execute_approved_action
+
+    user_id = await _seed_user(db_pool, email="expired-hitl-return@example.com")
+    order_id = await _seed_order(db_pool, user_id, status="delivered", total=30.0)
+    await db_pool.execute(
+        "UPDATE orders SET created_at = NOW() - INTERVAL '31 days' WHERE id = $1",
+        order_id,
+    )
+
+    result = await execute_approved_action(
+        tool_name="initiate_return",
+        tool_input={"order_id": str(order_id), "reason": "damaged"},
+        user_email="expired-hitl-return@example.com",
+    )
+
+    assert result["success"] is False
+    count = await db_pool.fetchval("SELECT COUNT(*) FROM returns WHERE order_id = $1", order_id)
+    assert count == 0
+
+
+async def test_chat_cancellation_releases_recorded_checkout_stock(db_pool: asyncpg.Pool) -> None:
+    from order_management.tools import cancel_order
+    from shared.inventory_ledger import change_inventory
+
+    user_id = await _seed_user(db_pool, email="cancel-stock@example.com")
+    order_id = await _seed_order(db_pool, user_id, status="placed", total=50.0)
+    product_id = await _seed_product(db_pool)
+    warehouse_id = uuid.uuid4()
+    await db_pool.execute(
+        "INSERT INTO warehouses (id, name, location, region) VALUES ($1, 'Cancel Test WH', 'Test', 'east')",
+        warehouse_id,
+    )
+    await db_pool.execute(
+        "INSERT INTO warehouse_inventory (warehouse_id, product_id, quantity) VALUES ($1, $2, 8)",
+        warehouse_id,
+        product_id,
+    )
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            await change_inventory(
+                conn,
+                warehouse_id=warehouse_id,
+                product_id=product_id,
+                quantity_delta=-2,
+                movement_type="sale",
+                event_key=f"checkout:{order_id}:{warehouse_id}:{product_id}",
+                order_id=order_id,
+            )
+
+    current_user_email.set("cancel-stock@example.com")
+    current_user_role.set("customer")
+    result = await cancel_order(order_id=str(order_id), reason="Changed my mind")
+
+    assert result["new_status"] == "cancelled"
+    assert result["inventory_released_units"] == 2
+    stock = await db_pool.fetchval(
+        "SELECT quantity FROM warehouse_inventory WHERE warehouse_id = $1 AND product_id = $2",
+        warehouse_id,
+        product_id,
+    )
+    assert stock == 8
+    release_count = await db_pool.fetchval(
+        "SELECT COUNT(*) FROM inventory_movements WHERE order_id = $1 AND movement_type = 'cancel_release'",
+        order_id,
+    )
+    assert release_count == 1
 
 
 # ─────────────────────── 5. claim_hitl_request TOCTOU fix ─────────────────

@@ -24,13 +24,14 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from agent_framework._middleware import FunctionInvocationContext, FunctionMiddleware
 
 from shared.config import settings
 from shared.context import current_session_id, current_user_email
 from shared.idempotency import idempotent
+from shared.inventory_ledger import release_cancelled_order_inventory
 
 logger = logging.getLogger(__name__)
 
@@ -320,7 +321,11 @@ async def resolve_hitl_request(
 # ─────────────────────── Action executor ────────────────────────────────────
 
 
-@idempotent("hitl_execute", identity_fn=lambda tool_name, tool_input, user_email: user_email)
+@idempotent(
+    "hitl_execute",
+    identity_fn=lambda tool_name, tool_input, user_email: user_email,
+    cache_result_fn=lambda result: result.get("success") is True,
+)
 async def execute_approved_action(
     tool_name: str,
     tool_input: dict,
@@ -346,22 +351,42 @@ async def execute_approved_action(
 
     if tool_name == "cancel_order":
         order_id = tool_input.get("order_id", "")
+        reason = str(tool_input.get("reason", "Cancellation approved by admin"))[:500]
         async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """UPDATE orders SET status = 'cancelled', updated_at = NOW()
-                   WHERE id = $1
-                     AND user_id = (SELECT id FROM users WHERE email = $2)
-                     AND status IN ('placed', 'confirmed')
-                   RETURNING id, status, total""",
-                order_id,
-                user_email,
-            )
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    """UPDATE orders SET status = 'cancelled'
+                       WHERE id = $1
+                         AND user_id = (SELECT id FROM users WHERE email = $2)
+                         AND status IN ('placed', 'confirmed')
+                       RETURNING id, status, total""",
+                    order_id,
+                    user_email,
+                )
+                if row:
+                    await conn.execute(
+                        """INSERT INTO order_status_history (order_id, status, notes)
+                           VALUES ($1, 'cancelled', $2)""",
+                        row["id"],
+                        f"Cancellation approved by admin: {reason}",
+                    )
+                    inventory_released = await release_cancelled_order_inventory(
+                        conn,
+                        order_id=row["id"],
+                    )
+                else:
+                    inventory_released = 0
         if row:
             return {
                 "success": True,
                 "order_id": order_id,
                 "new_status": "cancelled",
-                "message": f"Order {order_id[:8]} cancelled. Refund of ${float(row['total']):.2f} initiated.",
+                "refund_status": "not_processed",
+                "inventory_released_units": inventory_released,
+                "message": (
+                    f"Order {order_id[:8]} cancelled. No real refund was issued because "
+                    "this demo checkout has no payment-provider integration."
+                ),
             }
         return {"success": False, "message": "Order not found or already processed."}
 
@@ -377,18 +402,26 @@ async def execute_approved_action(
         # `return_id`, guarded by status so a double-execution (a retry
         # that reaches this code despite the idempotency wrapper above,
         # e.g. two different HITL requests for the same return) reports
-        # "already refunded" instead of a second success.
+        # "already refunded" instead of a second success. A refund may only
+        # be marked complete after an admin confirms the return was received.
         return_id = tool_input.get("return_id", "")
         async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """UPDATE returns SET status = 'refunded', resolved_at = NOW()
-                   WHERE id = $1
-                     AND user_id = (SELECT id FROM users WHERE email = $2)
-                     AND status NOT IN ('refunded', 'denied')
-                   RETURNING id, order_id, refund_method, refund_amount""",
-                return_id,
-                user_email,
-            )
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    """UPDATE returns SET status = 'refunded', resolved_at = NOW()
+                       WHERE id = $1
+                         AND user_id = (SELECT id FROM users WHERE email = $2)
+                         AND status = 'received'
+                       RETURNING id, order_id, refund_method, refund_amount""",
+                    return_id,
+                    user_email,
+                )
+                if row:
+                    await conn.execute(
+                        """INSERT INTO order_status_history (order_id, status, notes)
+                           VALUES ($1, 'returned', 'Demo refund marked complete after return receipt')""",
+                        row["order_id"],
+                    )
         if row:
             amount = float(row["refund_amount"]) if row["refund_amount"] else 0.0
             method = row["refund_method"] or "original_payment"
@@ -397,40 +430,97 @@ async def execute_approved_action(
                 "return_id": return_id,
                 "order_id": str(row["order_id"]),
                 "refunded_amount": amount,
-                "message": f"Refund of ${amount:.2f} processed via {method.replace('_', ' ')}.",
+                "refund_mode": "simulated",
+                "message": (
+                    f"Demo refund of ${amount:.2f} marked complete via {method.replace('_', ' ')}. "
+                    "No payment provider is connected, so no money was transferred."
+                ),
             }
-        return {"success": False, "message": "Return not found, already resolved, or access denied."}
+        return {
+            "success": False,
+            "message": "Return not found, not yet received, already resolved, or access denied.",
+        }
 
     if tool_name == "initiate_return":
         order_id = tool_input.get("order_id", "")
         reason = tool_input.get("reason", "Admin-approved return")
+        refund_method = tool_input.get("refund_method", "original_payment")
+        if refund_method not in {"original_payment", "store_credit"}:
+            return {"success": False, "message": "Unsupported refund method."}
         async with pool.acquire() as conn:
-            # NOT EXISTS guards against a second run inserting a second
-            # returns row for the same order (a double-execution here
-            # otherwise has no status/uniqueness guard at all, unlike
-            # cancel_order's WHERE ... status IN (...) or process_refund's
-            # WHERE ... status NOT IN (...) above).
-            row = await conn.fetchrow(
-                """INSERT INTO returns (order_id, user_id, reason, status, refund_method)
-                   SELECT o.id, o.user_id, $3, 'approved', 'original_payment'
-                   FROM orders o
-                   JOIN users u ON o.user_id = u.id
-                   WHERE o.id = $1 AND u.email = $2
-                     AND NOT EXISTS (SELECT 1 FROM returns r WHERE r.order_id = o.id)
-                   RETURNING id""",
-                order_id,
-                user_email,
-                reason,
-            )
+            async with conn.transaction():
+                order = await conn.fetchrow(
+                    """SELECT o.id, o.user_id, o.status, o.total, o.created_at
+                       FROM orders o
+                       JOIN users u ON o.user_id = u.id
+                       WHERE o.id = $1 AND u.email = $2
+                       FOR UPDATE OF o""",
+                    order_id,
+                    user_email,
+                )
+                row = None
+                if order and order["status"] == "delivered":
+                    delivered = await conn.fetchrow(
+                        """SELECT timestamp FROM order_status_history
+                           WHERE order_id = $1 AND status = 'delivered'
+                           ORDER BY timestamp DESC LIMIT 1""",
+                        order_id,
+                    )
+                    from shared.return_policy import evaluate_return_window
+
+                    window = evaluate_return_window(
+                        order_created_at=order["created_at"],
+                        delivered_at=delivered["timestamp"] if delivered else None,
+                    )
+                    existing = await conn.fetchval(
+                        "SELECT id FROM returns WHERE order_id = $1",
+                        order_id,
+                    )
+                    if not window["eligible"]:
+                        return {
+                            "success": False,
+                            "message": "Return window expired. The request was not approved.",
+                        }
+                    if not existing:
+                        label_token = uuid4().hex[:12]
+                        label_url = f"/api/returns/{label_token}/label"
+                        row = await conn.fetchrow(
+                            """INSERT INTO returns
+                                   (order_id, user_id, reason, status, return_label_url, refund_method, refund_amount)
+                               VALUES ($1, $2, $3, 'approved', $4, $5, $6)
+                               RETURNING id""",
+                            order["id"],
+                            order["user_id"],
+                            str(reason)[:255],
+                            label_url,
+                            refund_method,
+                            order["total"],
+                        )
+                        await conn.execute(
+                            "UPDATE orders SET status = 'returned' WHERE id = $1",
+                            order["id"],
+                        )
+                        await conn.execute(
+                            """INSERT INTO order_status_history (order_id, status, notes)
+                               VALUES ($1, 'returned', 'Return approved by admin')""",
+                            order["id"],
+                        )
         if row:
             return {
                 "success": True,
                 "return_id": str(row["id"]),
-                "message": "Return approved and initiated.",
+                "message": (
+                    "Return approved. The return label is ready; refund processing waits "
+                    "until the item is received."
+                ),
             }
         existing = await pool.fetchval(
-            "SELECT id FROM returns WHERE order_id = $1",
+            """SELECT r.id
+               FROM returns r
+               JOIN users u ON u.id = r.user_id
+               WHERE r.order_id = $1 AND u.email = $2""",
             order_id,
+            user_email,
         )
         if existing:
             return {
@@ -438,7 +528,10 @@ async def execute_approved_action(
                 "return_id": str(existing),
                 "message": "A return has already been initiated for this order.",
             }
-        return {"success": False, "message": "Order not found."}
+        return {
+            "success": False,
+            "message": "Order not found, not delivered, already has a return, or no longer eligible.",
+        }
 
     if tool_name == "modify_order":
         order_id = tool_input.get("order_id", "")

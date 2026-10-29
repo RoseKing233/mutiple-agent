@@ -16,19 +16,19 @@ import json
 import logging
 import time
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from shared.config import settings
 from shared.context import current_session_id, current_user_email, current_user_role
 from shared.db import get_pool
 from shared.factory import get_token_verifier
 from shared.idempotency import idempotent
-from shared.inventory_ledger import change_inventory
+from shared.inventory_ledger import change_inventory, release_cancelled_order_inventory
 from shared.jwt_utils import (
     create_access_token,
     create_refresh_token,
@@ -37,6 +37,7 @@ from shared.jwt_utils import (
     verify_password,
 )
 from shared.oauth.service_client import request_token
+from shared.return_policy import can_transition_return, evaluate_return_window
 from shared.tool_inputs import clamp_limit
 
 logger = logging.getLogger(__name__)
@@ -105,12 +106,39 @@ class CheckoutRequest(BaseModel):
 
 
 class CancelOrderRequest(BaseModel):
-    reason: str
+    reason: str = Field(min_length=1, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def _reason_not_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("reason must not be blank")
+        return value
 
 
 class ReturnOrderRequest(BaseModel):
-    reason: str
+    reason: str = Field(min_length=1, max_length=255)
     refund_method: str = "original_payment"
+
+    @field_validator("reason")
+    @classmethod
+    def _reason_not_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("reason must not be blank")
+        return value
+
+    @field_validator("refund_method")
+    @classmethod
+    def _valid_refund_method(cls, value: str) -> str:
+        if value not in {"original_payment", "store_credit"}:
+            raise ValueError("refund_method must be 'original_payment' or 'store_credit'")
+        return value
+
+
+class ReturnStatusRequest(BaseModel):
+    status: Literal["approved", "denied", "received", "refunded"]
 
 
 # ── Auth Dependency ────────────────────────────────────────────
@@ -1459,6 +1487,32 @@ async def get_order(order_id: str, user: dict = Depends(require_auth)):
         "SELECT id, reason, status, refund_method, refund_amount, return_label_url, created_at, resolved_at FROM returns WHERE order_id = $1",
         order_id,
     )
+    delivered_event = next((entry for entry in reversed(history) if entry["status"] == "delivered"), None)
+    if ret:
+        return_eligibility = {
+            "eligible": False,
+            "reason": f"A return already exists for this order (status: {ret['status']}).",
+        }
+    elif order["status"] != "delivered":
+        return_eligibility = {
+            "eligible": False,
+            "reason": f"Order must be delivered to be eligible for return. Current status: {order['status']}.",
+        }
+    else:
+        window = evaluate_return_window(
+            order_created_at=order["created_at"],
+            delivered_at=delivered_event["timestamp"] if delivered_event else None,
+        )
+        return_eligibility = {
+            "eligible": window["eligible"],
+            "days_remaining": window["days_remaining"],
+            "delivery_date_estimated": window["used_order_date_fallback"],
+            "reason": (
+                None
+                if window["eligible"]
+                else "Return window expired. Returns must be requested within 30 days."
+            ),
+        }
 
     return {
         "id": str(order["id"]),
@@ -1500,6 +1554,7 @@ async def get_order(order_id: str, user: dict = Depends(require_auth)):
             }
             for h in history
         ],
+        "return_eligibility": return_eligibility,
         "return": {
             "id": str(ret["id"]),
             "reason": ret["reason"],
@@ -1521,25 +1576,27 @@ async def cancel_order(order_id: str, body: CancelOrderRequest, user: dict = Dep
     pool = get_pool()
     email = current_user_email.get()
 
-    order = await pool.fetchrow(
-        """SELECT o.id, o.status, o.total
-           FROM orders o
-           JOIN users u ON o.user_id = u.id
-           WHERE o.id = $1 AND u.email = $2""",
-        order_id,
-        email,
-    )
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
-
-    if order["status"] not in ("placed", "confirmed"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot cancel order with status '{order['status']}'. Only placed or confirmed orders can be cancelled.",
-        )
-
     async with pool.acquire() as conn:
         async with conn.transaction():
+            order = await conn.fetchrow(
+                """SELECT o.id, o.status, o.total
+                   FROM orders o
+                   JOIN users u ON o.user_id = u.id
+                   WHERE o.id = $1 AND u.email = $2
+                   FOR UPDATE OF o""",
+                order_id,
+                email,
+            )
+            if not order:
+                raise HTTPException(status_code=404, detail="Order not found")
+            if order["status"] not in ("placed", "confirmed"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Cannot cancel order with status '{order['status']}'. "
+                        "Only placed or confirmed orders can be cancelled."
+                    ),
+                )
             await conn.execute(
                 "UPDATE orders SET status = 'cancelled' WHERE id = $1",
                 order_id,
@@ -1550,11 +1607,21 @@ async def cancel_order(order_id: str, body: CancelOrderRequest, user: dict = Dep
                 order_id,
                 body.reason,
             )
+            inventory_released = await release_cancelled_order_inventory(
+                conn,
+                order_id=order["id"],
+            )
 
     return {
         "order_id": str(order["id"]),
         "status": "cancelled",
         "refund_amount": float(order["total"]),
+        "refund_status": "not_processed",
+        "inventory_released_units": inventory_released,
+        "message": (
+            "Order cancelled. This demo checkout is not connected to a payment provider, "
+            "so no real refund has been issued."
+        ),
     }
 
 
@@ -1564,43 +1631,62 @@ async def return_order(order_id: str, body: ReturnOrderRequest, user: dict = Dep
     pool = get_pool()
     email = current_user_email.get()
 
-    order = await pool.fetchrow(
-        """SELECT o.id, o.status, o.total, o.user_id
-           FROM orders o
-           JOIN users u ON o.user_id = u.id
-           WHERE o.id = $1 AND u.email = $2""",
-        order_id,
-        email,
-    )
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
-
-    if order["status"] != "delivered":
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot return order with status '{order['status']}'. Only delivered orders can be returned.",
-        )
-
-    existing_return = await pool.fetchrow(
-        "SELECT id FROM returns WHERE order_id = $1",
-        order_id,
-    )
-    if existing_return:
-        raise HTTPException(status_code=409, detail="A return has already been requested for this order")
-
-    label_token = uuid.uuid4().hex[:12]
-    return_label_url = f"/api/returns/{label_token}/label"
-
     async with pool.acquire() as conn:
         async with conn.transaction():
+            order = await conn.fetchrow(
+                """SELECT o.id, o.status, o.total, o.user_id, o.created_at
+                   FROM orders o
+                   JOIN users u ON o.user_id = u.id
+                   WHERE o.id = $1 AND u.email = $2
+                   FOR UPDATE OF o""",
+                order_id,
+                email,
+            )
+            if not order:
+                raise HTTPException(status_code=404, detail="Order not found")
+            if order["status"] != "delivered":
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Cannot return order with status '{order['status']}'. "
+                        "Only delivered orders can be returned."
+                    ),
+                )
+
+            existing_return = await conn.fetchrow(
+                "SELECT id FROM returns WHERE order_id = $1",
+                order_id,
+            )
+            if existing_return:
+                raise HTTPException(status_code=409, detail="A return has already been requested for this order")
+
+            delivered = await conn.fetchrow(
+                """SELECT timestamp FROM order_status_history
+                   WHERE order_id = $1 AND status = 'delivered'
+                   ORDER BY timestamp DESC LIMIT 1""",
+                order_id,
+            )
+            window = evaluate_return_window(
+                order_created_at=order["created_at"],
+                delivered_at=delivered["timestamp"] if delivered else None,
+            )
+            if not window["eligible"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Return window expired. Returns must be requested within 30 days of "
+                        "delivery (or order date when delivery history is unavailable)."
+                    ),
+                )
+
             ret = await conn.fetchrow(
-                """INSERT INTO returns (order_id, user_id, reason, status, return_label_url, refund_method, refund_amount)
-                   VALUES ($1, $2, $3, 'requested', $4, $5, $6)
+                """INSERT INTO returns
+                   (order_id, user_id, reason, status, return_label_url, refund_method, refund_amount)
+                   VALUES ($1, $2, $3, 'requested', NULL, $4, $5)
                    RETURNING id""",
                 order_id,
                 str(order["user_id"]),
                 body.reason,
-                return_label_url,
                 body.refund_method,
                 float(order["total"]),
             )
@@ -1619,9 +1705,155 @@ async def return_order(order_id: str, body: ReturnOrderRequest, user: dict = Dep
         "return_id": str(ret["id"]),
         "order_id": str(order["id"]),
         "status": "requested",
-        "return_label_url": return_label_url,
+        "return_label_url": None,
         "refund_amount": float(order["total"]),
         "refund_method": body.refund_method,
+        "message": "Return request submitted for review. A label will be available after approval.",
+    }
+
+
+@router.post("/api/orders/{order_id}/return/shipped", dependencies=[Depends(require_shopper)])
+async def mark_return_shipped(order_id: str, user: dict = Depends(require_auth)):
+    """Record that the customer shipped an approved return."""
+    pool = get_pool()
+    email = current_user_email.get()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            order = await conn.fetchrow(
+                """SELECT o.id FROM orders o
+                   JOIN users u ON o.user_id = u.id
+                   WHERE o.id = $1 AND u.email = $2
+                   FOR UPDATE OF o""",
+                order_id,
+                email,
+            )
+            if not order:
+                raise HTTPException(status_code=404, detail="Order not found")
+            ret = await conn.fetchrow(
+                """UPDATE returns SET status = 'shipped_back'
+                   WHERE order_id = $1 AND user_id = (SELECT id FROM users WHERE email = $2)
+                     AND status = 'approved'
+                   RETURNING id""",
+                order_id,
+                email,
+            )
+            if not ret:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Only an approved return can be marked as shipped.",
+                )
+            await conn.execute(
+                """INSERT INTO order_status_history (order_id, status, notes)
+                   VALUES ($1, 'returned', 'Customer marked the approved return as shipped')""",
+                order_id,
+            )
+    return {"order_id": order_id, "return_id": str(ret["id"]), "status": "shipped_back"}
+
+
+@router.get("/api/admin/returns", dependencies=[Depends(require_admin)])
+async def list_admin_returns():
+    """List returns for the admin review and fulfillment queue."""
+    pool = get_pool()
+    rows = await pool.fetch(
+        """SELECT r.id, r.order_id, r.reason, r.status, r.refund_method,
+                  r.refund_amount, r.return_label_url, r.created_at,
+                  u.email AS user_email
+           FROM returns r
+           JOIN users u ON r.user_id = u.id
+           ORDER BY r.created_at DESC
+           LIMIT 200"""
+    )
+    return {
+        "returns": [
+            {
+                "id": str(row["id"]),
+                "order_id": str(row["order_id"]),
+                "reason": row["reason"],
+                "status": row["status"],
+                "refund_method": row["refund_method"],
+                "refund_amount": float(row["refund_amount"]) if row["refund_amount"] is not None else None,
+                "return_label_url": row["return_label_url"],
+                "created_at": row["created_at"].isoformat(),
+                "user_email": row["user_email"],
+            }
+            for row in rows
+        ]
+    }
+
+
+@router.post("/api/admin/returns/{return_id}/status", dependencies=[Depends(require_admin)])
+async def update_admin_return_status(return_id: str, body: ReturnStatusRequest):
+    """Apply a valid return transition; refund completion is a demo-only state change."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            order_id = await conn.fetchval(
+                """SELECT o.id FROM orders o
+                   JOIN returns r ON r.order_id = o.id
+                   WHERE r.id = $1
+                   FOR UPDATE OF o""",
+                return_id,
+            )
+            if not order_id:
+                raise HTTPException(status_code=404, detail="Return not found")
+            ret = await conn.fetchrow(
+                "SELECT id, status FROM returns WHERE id = $1 FOR UPDATE",
+                return_id,
+            )
+            if not can_transition_return(ret["status"], body.status):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Cannot transition return from '{ret['status']}' to '{body.status}'.",
+                )
+
+            label_url = None
+            if body.status == "approved":
+                label_token = uuid.uuid4().hex[:12]
+                label_url = f"/api/returns/{label_token}/label"
+                await conn.execute(
+                    "UPDATE returns SET status = $2, return_label_url = $3 WHERE id = $1",
+                    return_id,
+                    body.status,
+                    label_url,
+                )
+            else:
+                resolved = body.status in {"denied", "refunded"}
+                await conn.execute(
+                    """UPDATE returns SET status = $2,
+                              resolved_at = CASE WHEN $3 THEN NOW() ELSE resolved_at END,
+                              return_label_url = CASE WHEN $2 = 'denied' THEN NULL ELSE return_label_url END
+                       WHERE id = $1""",
+                    return_id,
+                    body.status,
+                    resolved,
+                )
+
+            if body.status == "denied":
+                await conn.execute("UPDATE orders SET status = 'delivered' WHERE id = $1", order_id)
+                await conn.execute(
+                    """INSERT INTO order_status_history (order_id, status, notes)
+                       VALUES ($1, 'delivered', 'Return request denied by admin')""",
+                    order_id,
+                )
+            else:
+                await conn.execute(
+                    """INSERT INTO order_status_history (order_id, status, notes)
+                       VALUES ($1, 'returned', $2)""",
+                    order_id,
+                    f"Return status changed to {body.status} by admin",
+                )
+
+    return {
+        "return_id": return_id,
+        "order_id": str(order_id),
+        "status": body.status,
+        "return_label_url": label_url,
+        "refund_mode": "simulated" if body.status == "refunded" else None,
+        "message": (
+            "Demo refund marked complete. No payment provider is connected, so no money was transferred."
+            if body.status == "refunded"
+            else f"Return status updated to {body.status}."
+        ),
     }
 
 
@@ -1642,8 +1874,9 @@ async def get_return_label(label_token: str):
            FROM returns r
            JOIN orders o ON r.order_id = o.id
            JOIN users u ON r.user_id = u.id
-           WHERE r.return_label_url LIKE $1""",
-        f"%{label_token}%",
+           WHERE r.return_label_url = $1
+             AND r.status IN ('approved', 'shipped_back', 'received', 'refunded')""",
+        f"/api/returns/{label_token}/label",
     )
     if not ret:
         raise HTTPException(status_code=404, detail="Return label not found")

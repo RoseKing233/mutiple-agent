@@ -1,7 +1,7 @@
 """Atomic stock changes. Call inside the SAME transaction as the business operation.
 
-Future return/cancel handlers should reuse this helper after their own authorization
-and business checks. Recording a recommendation must never call this helper.
+Cancellation reversals reuse these helpers after authorization and state checks.
+Recording a recommendation must never change inventory.
 """
 
 from __future__ import annotations
@@ -111,3 +111,36 @@ async def change_inventory(
         notes,
     )
     return balance
+
+
+async def release_cancelled_order_inventory(
+    conn: asyncpg.Connection,
+    *,
+    order_id: uuid.UUID,
+) -> int:
+    """Reverse recorded checkout sales for a cancelled, not-yet-shipped order."""
+    if not conn.is_in_transaction():
+        raise RuntimeError("release_cancelled_order_inventory requires an enclosing database transaction")
+
+    sales = await conn.fetch(
+        """SELECT id, event_key, product_id, warehouse_id, quantity_delta
+           FROM inventory_movements
+           WHERE order_id = $1 AND movement_type = 'sale' AND quantity_delta < 0
+           ORDER BY product_id, warehouse_id, id""",
+        order_id,
+    )
+    released_quantity = 0
+    for sale in sales:
+        quantity = -sale["quantity_delta"]
+        await change_inventory(
+            conn,
+            product_id=sale["product_id"],
+            warehouse_id=sale["warehouse_id"],
+            quantity_delta=quantity,
+            movement_type="cancel_release",
+            event_key=f"cancel:{sale['event_key']}",
+            order_id=order_id,
+            notes="Released from cancelled order",
+        )
+        released_quantity += quantity
+    return released_quantity

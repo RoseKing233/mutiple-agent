@@ -24,6 +24,7 @@ from shared.tools.cart_tools import (
     set_shipping_address,
     update_cart_quantity,
 )
+from shared.tools.memory_tools import recall_memories, store_memory
 from shared.tools.return_tools import (
     check_return_eligibility,
     get_return_status,
@@ -43,6 +44,8 @@ AGENT_TOOLS = [
     process_refund,
     get_return_status,
     get_user_profile,
+    recall_memories,
+    store_memory,
     add_to_cart,
     get_cart,
     remove_from_cart,

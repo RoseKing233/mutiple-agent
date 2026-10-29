@@ -41,7 +41,7 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
-from typing import Any, ParamSpec, TypeVar
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -51,9 +51,6 @@ logger = logging.getLogger(__name__)
 _STALE_AFTER = timedelta(seconds=60)
 
 _CONFLICT_MESSAGE = "A request for this action is already being processed. Please wait a moment and try again."
-
-P = ParamSpec("P")
-R = TypeVar("R", bound=dict)
 
 
 def _canonical_key(scope: str, identity: str, bound_args: dict[str, Any]) -> str:
@@ -139,10 +136,11 @@ async def _release(pool: Any, key: str) -> None:
     )
 
 
-def idempotent(
+def idempotent[**P, R: dict](
     scope: str,
     *,
     identity_fn: Callable[..., str] | None = None,
+    cache_result_fn: Callable[[R], bool] | None = None,
 ) -> Callable[[Callable[P, Awaitable[R]]], Callable[P, Awaitable[R]]]:
     """Make an async, dict-returning DB-mutating function idempotent per (identity, scope, args).
 
@@ -155,6 +153,8 @@ def idempotent(
     The wrapped function must return a ``dict`` on every path — the same
     convention every tool function and ``execute_approved_action`` branch
     in this codebase already follows.
+    ``cache_result_fn`` can restrict replay to successful business outcomes;
+    rejected attempts release their reservation so state changes can be retried.
     """
 
     def decorator(fn: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
@@ -187,7 +187,9 @@ def idempotent(
                 await _release(pool, key)
                 raise
 
-            if isinstance(result, dict):
+            if cache_result_fn is not None and not cache_result_fn(result):
+                await _release(pool, key)
+            elif isinstance(result, dict):
                 await _complete(pool, key, result)
             else:
                 # Every current call site returns a dict; a non-dict result
