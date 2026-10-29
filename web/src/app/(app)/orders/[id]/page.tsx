@@ -43,7 +43,6 @@ import {
   Loader2,
   Download,
   Ban,
-  AlertCircle,
 } from "lucide-react";
 import { productImageUrl } from "@/lib/images";
 
@@ -85,7 +84,7 @@ interface ReturnInfo {
   refund_amount: number | null;
   created_at?: string;
   resolved_at?: string | null;
-  return_label_url?: string;
+  return_label_url?: string | null;
 }
 
 interface BillingAddress {
@@ -109,6 +108,12 @@ interface OrderDetail {
   tracking?: string;
   discount: number;
   total: number;
+  return_eligibility?: {
+    eligible: boolean;
+    days_remaining?: number;
+    delivery_date_estimated?: boolean;
+    reason?: string | null;
+  };
   return?: ReturnInfo | null;
   [key: string]: unknown;
 }
@@ -321,6 +326,7 @@ export default function OrderDetailPage() {
   const [returnReason, setReturnReason] = useState("");
   const [refundMethod, setRefundMethod] = useState<"original_payment" | "store_credit">("original_payment");
   const [returning, setReturning] = useState(false);
+  const [shippingReturn, setShippingReturn] = useState(false);
 
   const orderId = params.id as string;
 
@@ -373,6 +379,18 @@ export default function OrderDetailPage() {
       setError(err instanceof Error ? err.message : "Failed to initiate return");
     } finally {
       setReturning(false);
+    }
+  };
+
+  const handleMarkReturnShipped = async () => {
+    try {
+      setShippingReturn(true);
+      await api.markReturnShipped(orderId);
+      await loadOrder();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update return status");
+    } finally {
+      setShippingReturn(false);
     }
   };
 
@@ -459,7 +477,9 @@ export default function OrderDetailPage() {
                   </Dialog>
                 )}
 
-                {order.status === "delivered" && !order["return"] && (
+                {order.status === "delivered" &&
+                  !order["return"] &&
+                  order.return_eligibility?.eligible && (
                   <Dialog open={returnOpen} onOpenChange={setReturnOpen}>
                     <DialogTrigger
                       render={
@@ -486,6 +506,9 @@ export default function OrderDetailPage() {
                         </div>
                         <div className="space-y-2">
                           <Label>Refund method</Label>
+                          <p className="text-xs text-muted-foreground">
+                            Demo preference only; no payment provider is connected.
+                          </p>
                           <div className="flex gap-2">
                             <Button
                               type="button"
@@ -519,6 +542,14 @@ export default function OrderDetailPage() {
                     </DialogContent>
                   </Dialog>
                 )}
+                {order.status === "delivered" &&
+                  !order["return"] &&
+                  order.return_eligibility &&
+                  !order.return_eligibility.eligible && (
+                    <p className="max-w-56 text-xs text-muted-foreground">
+                      {order.return_eligibility.reason}
+                    </p>
+                  )}
               </div>
             </div>
           )}
@@ -722,6 +753,9 @@ export default function OrderDetailPage() {
                       {formatPrice(order.items?.reduce((sum: number, i: OrderItem) => sum + i.subtotal, 0) ?? 0)}
                     </span>
                   </div>
+                  <p className="text-xs text-muted-foreground">
+                    Demo refunds update the return record only; no payment provider is connected.
+                  </p>
                   {order.discount > 0 && (
                     <div className="flex items-center justify-between text-sm">
                       <span className="text-muted-foreground">Discount</span>
@@ -752,6 +786,19 @@ export default function OrderDetailPage() {
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-3">
+                    <p className="text-sm text-muted-foreground">
+                      {(order["return"] as ReturnInfo).status === "requested"
+                        ? "Waiting for admin approval. The demo return label will be available after approval."
+                        : (order["return"] as ReturnInfo).status === "approved"
+                          ? "Approved. Download the demo label, ship the item, then mark it shipped."
+                          : (order["return"] as ReturnInfo).status === "shipped_back"
+                            ? "The item is marked shipped and is waiting for admin receipt confirmation."
+                            : (order["return"] as ReturnInfo).status === "received"
+                              ? "The return was received and is awaiting demo refund processing."
+                              : (order["return"] as ReturnInfo).status === "refunded"
+                                ? "Demo refund marked complete; no money was transferred."
+                                : "This return request was denied."}
+                    </p>
                     <div className="space-y-2">
                       <div className="flex items-center justify-between text-sm">
                         <span className="text-muted-foreground">Reason</span>
@@ -798,7 +845,13 @@ export default function OrderDetailPage() {
                           )}
                           {(order["return"] as ReturnInfo).resolved_at && (
                             <div className="flex items-center justify-between text-xs text-muted-foreground">
-                              <span>Refund processed</span>
+                              <span>
+                                {(order["return"] as ReturnInfo).status === "denied"
+                                  ? "Return resolved"
+                                  : (order["return"] as ReturnInfo).status === "refunded"
+                                    ? "Demo refund marked"
+                                    : "Return resolved"}
+                              </span>
                               <span>
                                 {formatDate((order["return"] as ReturnInfo).resolved_at!)}
                               </span>
@@ -822,13 +875,23 @@ export default function OrderDetailPage() {
                             }}
                           >
                             <Download className="mr-2 size-4" />
-                            Download Return Label
+                            Download Demo Return Label
                           </Button>
                           <p className="text-xs text-muted-foreground text-center">
-                            Print the return label and drop off at any carrier location
+                            Demo label only; postage or carrier pickup has not been purchased.
                           </p>
                         </div>
                       </>
+                    )}
+                    {(order["return"] as ReturnInfo).status === "approved" && (
+                      <Button
+                        className="w-full"
+                        disabled={shippingReturn}
+                        onClick={handleMarkReturnShipped}
+                      >
+                        {shippingReturn && <Loader2 className="mr-2 size-4 animate-spin" />}
+                        Mark Item Shipped
+                      </Button>
                     )}
                   </CardContent>
                 </Card>

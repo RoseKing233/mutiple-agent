@@ -876,6 +876,9 @@ class ApiClient {
       order_id: string;
       status: string;
       refund_amount: number;
+      refund_status: string;
+      inventory_released_units: number;
+      message: string;
     }>(`/api/orders/${orderId}/cancel`, {
       method: "POST",
       body: JSON.stringify({ reason }),
@@ -887,12 +890,53 @@ class ApiClient {
       return_id: string;
       order_id: string;
       status: string;
-      return_label_url: string;
+      return_label_url: string | null;
       refund_amount: number;
       refund_method: string;
+      message: string;
     }>(`/api/orders/${orderId}/return`, {
       method: "POST",
       body: JSON.stringify({ reason, refund_method: refundMethod }),
+    });
+  }
+
+  markReturnShipped(orderId: string) {
+    return this.request<{ order_id: string; return_id: string; status: string }>(
+      `/api/orders/${orderId}/return/shipped`,
+      { method: "POST" },
+    );
+  }
+
+  getAdminReturns() {
+    return this.request<{
+      returns: {
+        id: string;
+        order_id: string;
+        reason: string;
+        status: string;
+        refund_method: string;
+        refund_amount: number | null;
+        return_label_url: string | null;
+        created_at: string;
+        user_email: string;
+      }[];
+    }>("/api/admin/returns");
+  }
+
+  updateAdminReturnStatus(
+    returnId: string,
+    status: "approved" | "denied" | "received" | "refunded",
+  ) {
+    return this.request<{
+      return_id: string;
+      order_id: string;
+      status: string;
+      return_label_url: string | null;
+      refund_mode: string | null;
+      message: string;
+    }>(`/api/admin/returns/${returnId}/status`, {
+      method: "POST",
+      body: JSON.stringify({ status }),
     });
   }
 

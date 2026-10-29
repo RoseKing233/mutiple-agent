@@ -40,7 +40,7 @@ export function toastOrderPlaced(orderId: string) {
 
 export function toastOrderCancelled(orderId: string) {
   toast(`Order cancelled`, {
-    description: `Order #${orderId.slice(0, 8)} has been cancelled.`,
+    description: `Order #${orderId.slice(0, 8)} has been cancelled. Demo checkout does not issue real refunds.`,
   });
 }
 
@@ -52,7 +52,7 @@ export function toastOrderModified() {
 
 export function toastReturnInitiated(returnId: string) {
   toast.success("Return initiated", {
-    description: `Return #${returnId.slice(0, 8)} created. Check your email for the label.`,
+    description: `Return #${returnId.slice(0, 8)} submitted. The label will be available after approval.`,
   });
 }
 
