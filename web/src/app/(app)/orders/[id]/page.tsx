@@ -80,8 +80,9 @@ interface ReturnInfo {
   id: string;
   reason: string;
   status: string;
-  refund_method: string;
+  refund_method: string | null;
   refund_amount: number | null;
+  refund_approval_status?: string | null;
   created_at?: string;
   resolved_at?: string | null;
   return_label_url?: string | null;
@@ -182,6 +183,36 @@ const STATUS_CONFIG: Record<
     icon: CheckCircle,
     label: "Delivered",
   },
+  approved: {
+    color: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300 dark:border-emerald-500/30",
+    dotColor: "bg-emerald-500",
+    icon: CheckCircle,
+    label: "Return Approved",
+  },
+  shipped_back: {
+    color: "border-amber-200 bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300 dark:border-amber-500/30",
+    dotColor: "bg-amber-500",
+    icon: Truck,
+    label: "Return Shipped",
+  },
+  received: {
+    color: "border-blue-200 bg-blue-50 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300 dark:border-blue-500/30",
+    dotColor: "bg-blue-500",
+    icon: Package,
+    label: "Return Received",
+  },
+  refunded: {
+    color: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300 dark:border-emerald-500/30",
+    dotColor: "bg-emerald-500",
+    icon: CheckCircle,
+    label: "Refunded",
+  },
+  denied: {
+    color: "border-red-200 bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-300 dark:border-red-500/30",
+    dotColor: "bg-red-500",
+    icon: XCircle,
+    label: "Return Denied",
+  },
   returned: {
     color: "border-orange-200 bg-orange-50 text-orange-700 dark:bg-orange-500/15 dark:text-orange-300 dark:border-orange-500/30",
     dotColor: "bg-orange-500",
@@ -208,6 +239,20 @@ function getStatusConfig(status: string) {
   );
 }
 
+function getTimelineStatus(entry: StatusHistoryEntry): string {
+  const status = entry.status.toLowerCase();
+  if (status !== "returned") return status;
+
+  const notes = (entry.notes ?? "").toLowerCase();
+  if (notes.includes("refund") && (notes.includes("complete") || notes.includes("refunded"))) {
+    return "refunded";
+  }
+  if (notes.includes("received")) return "received";
+  if (notes.includes("shipped")) return "shipped_back";
+  if (notes.includes("approved") || notes.includes("initiated")) return "approved";
+  return status;
+}
+
 // ---------------------------------------------------------------------------
 // Status Timeline
 // ---------------------------------------------------------------------------
@@ -220,7 +265,7 @@ function StatusTimeline({ history }: { history: StatusHistoryEntry[] }) {
       {history.map((entry, idx) => {
         const isLatest = idx === history.length - 1;
         const isLast = idx === history.length - 1;
-        const cfg = getStatusConfig(entry.status);
+        const cfg = getStatusConfig(getTimelineStatus(entry));
 
         return (
           <div key={idx} className="relative flex gap-4 pb-6 last:pb-0">
@@ -324,7 +369,7 @@ export default function OrderDetailPage() {
   // Return order state
   const [returnOpen, setReturnOpen] = useState(false);
   const [returnReason, setReturnReason] = useState("");
-  const [refundMethod, setRefundMethod] = useState<"original_payment" | "store_credit">("original_payment");
+  const [returnRefundMethod, setReturnRefundMethod] = useState("original_payment");
   const [returning, setReturning] = useState(false);
   const [shippingReturn, setShippingReturn] = useState(false);
 
@@ -369,10 +414,10 @@ export default function OrderDetailPage() {
     if (!returnReason.trim()) return;
     try {
       setReturning(true);
-      const result = await api.initiateReturn(orderId, returnReason, refundMethod);
+      const result = await api.initiateReturn(orderId, returnReason, returnRefundMethod);
       setReturnOpen(false);
       setReturnReason("");
-      setRefundMethod("original_payment");
+      setReturnRefundMethod("original_payment");
       toastReturnInitiated(result?.return_id ?? orderId);
       await loadOrder();
     } catch (err) {
@@ -504,31 +549,20 @@ export default function OrderDetailPage() {
                             rows={3}
                           />
                         </div>
+                        <p className="text-xs text-muted-foreground">
+                          Eligible returns are approved automatically. After receipt is simulated, your refund will be sent for admin approval.
+                        </p>
                         <div className="space-y-2">
-                          <Label>Refund method</Label>
-                          <p className="text-xs text-muted-foreground">
-                            Demo preference only; no payment provider is connected.
-                          </p>
-                          <div className="flex gap-2">
-                            <Button
-                              type="button"
-                              variant={refundMethod === "original_payment" ? "default" : "outline"}
-                              size="sm"
-                              className={refundMethod === "original_payment" ? "bg-primary hover:opacity-90" : ""}
-                              onClick={() => setRefundMethod("original_payment")}
-                            >
-                              Original Payment
-                            </Button>
-                            <Button
-                              type="button"
-                              variant={refundMethod === "store_credit" ? "default" : "outline"}
-                              size="sm"
-                              className={refundMethod === "store_credit" ? "bg-primary hover:opacity-90" : ""}
-                              onClick={() => setRefundMethod("store_credit")}
-                            >
-                              Store Credit
-                            </Button>
-                          </div>
+                          <Label htmlFor="return-refund-method">Preferred refund method</Label>
+                          <select
+                            id="return-refund-method"
+                            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                            value={returnRefundMethod}
+                            onChange={(event) => setReturnRefundMethod(event.target.value)}
+                          >
+                            <option value="original_payment">Original payment</option>
+                            <option value="store_credit">Store credit</option>
+                          </select>
                         </div>
                         <Button
                           className="w-full bg-orange-600 text-white hover:bg-orange-700"
@@ -754,7 +788,7 @@ export default function OrderDetailPage() {
                     </span>
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    Demo refunds update the return record only; no payment provider is connected.
+                    Refunds are recorded here; no payment provider is connected.
                   </p>
                   {order.discount > 0 && (
                     <div className="flex items-center justify-between text-sm">
@@ -788,15 +822,23 @@ export default function OrderDetailPage() {
                   <CardContent className="space-y-3">
                     <p className="text-sm text-muted-foreground">
                       {(order["return"] as ReturnInfo).status === "requested"
-                        ? "Waiting for admin approval. The demo return label will be available after approval."
+                        ? "This older return request is waiting for admin approval."
                         : (order["return"] as ReturnInfo).status === "approved"
-                          ? "Approved. Download the demo label, ship the item, then mark it shipped."
+                          ? "Approved automatically. Download the demo label, ship the item, then mark it shipped."
                           : (order["return"] as ReturnInfo).status === "shipped_back"
-                            ? "The item is marked shipped and is waiting for admin receipt confirmation."
+                            ? "The item is marked shipped and is waiting for simulated receipt confirmation."
                             : (order["return"] as ReturnInfo).status === "received"
-                              ? "The return was received and is awaiting demo refund processing."
+                              ? (order["return"] as ReturnInfo).refund_approval_status === "denied"
+                                ? "The item was received, but an admin denied the refund request. No refund was processed."
+                                : (order["return"] as ReturnInfo).refund_approval_status === "executed"
+                                  ? "The refund was approved and marked complete."
+                                : ["pending", "processing"].includes(
+                                      (order["return"] as ReturnInfo).refund_approval_status ?? "",
+                                    )
+                                  ? "The item was received. The refund is queued for admin approval; no second request is needed."
+                                  : "The item was received, but the refund has not been approved."
                               : (order["return"] as ReturnInfo).status === "refunded"
-                                ? "Demo refund marked complete; no money was transferred."
+                                ? "Refund marked complete."
                                 : "This return request was denied."}
                     </p>
                     <div className="space-y-2">
@@ -815,19 +857,29 @@ export default function OrderDetailPage() {
                           {(order["return"] as ReturnInfo).status}
                         </Badge>
                       </div>
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-muted-foreground">Refund Method</span>
-                        <span className="text-muted-foreground">
-                          {(order["return"] as ReturnInfo).refund_method}
-                        </span>
-                      </div>
-                      {(order["return"] as ReturnInfo).refund_amount != null && (
-                        <div className="flex items-center justify-between text-sm">
-                          <span className="text-muted-foreground">Refund Amount</span>
-                          <span className="font-medium text-emerald-600">
-                            {formatPrice((order["return"] as ReturnInfo).refund_amount!)}
-                          </span>
-                        </div>
+                      {["received", "refunded"].includes((order["return"] as ReturnInfo).status) && (
+                        <>
+                          {(order["return"] as ReturnInfo).refund_method && (
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="text-muted-foreground">Refund Method</span>
+                              <span className="text-muted-foreground">
+                                {(order["return"] as ReturnInfo).refund_method!.replace(/_/g, " ")}
+                              </span>
+                            </div>
+                          )}
+                          {(order["return"] as ReturnInfo).refund_amount != null && (
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="text-muted-foreground">
+                                {(order["return"] as ReturnInfo).status === "refunded"
+                                  ? "Refund Amount"
+                                  : "Amount for Refund Approval"}
+                              </span>
+                              <span className="font-medium text-emerald-600">
+                                {formatPrice((order["return"] as ReturnInfo).refund_amount!)}
+                              </span>
+                            </div>
+                          )}
+                        </>
                       )}
                     </div>
                     {((order["return"] as ReturnInfo).created_at ||
@@ -849,7 +901,7 @@ export default function OrderDetailPage() {
                                 {(order["return"] as ReturnInfo).status === "denied"
                                   ? "Return resolved"
                                   : (order["return"] as ReturnInfo).status === "refunded"
-                                    ? "Demo refund marked"
+                                    ? "Refund marked"
                                     : "Return resolved"}
                               </span>
                               <span>
@@ -890,7 +942,7 @@ export default function OrderDetailPage() {
                         onClick={handleMarkReturnShipped}
                       >
                         {shippingReturn && <Loader2 className="mr-2 size-4 animate-spin" />}
-                        Mark Item Shipped
+                        Simulate Return Shipment
                       </Button>
                     )}
                   </CardContent>

@@ -125,6 +125,7 @@ export const ReturnDataSchema = z
     order_id: optionalSafeString,
     return_id: optionalSafeString,
     status: optionalSafeString,
+    refund_approval_status: safeString.nullable().optional(),
     return_label_url: optionalSafeString,
     refund_amount: positiveNumber.optional(),
     refund_method: optionalSafeString,

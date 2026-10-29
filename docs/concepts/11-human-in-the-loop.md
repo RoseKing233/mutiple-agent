@@ -38,10 +38,15 @@ This repo has two HITL implementations, and they are not interchangeable — kno
 given mode uses matters for understanding what actually happens when a gate fires.
 
 **Middleware-based approval** — [`shared/hitl.py`](https://github.com/nitin27may/e-commerce-agents/blob/main/agents/python/shared/hitl.py). A fixed set of high-stakes tools —
-`HITL_GATED_TOOLS`: `cancel_order`, `process_refund`, `initiate_return`, `modify_order`,
-`place_backorder` — are intercepted by `HITLFunctionMiddleware` *before* they execute. The
-docstring is explicit about what happens next: "the tool does NOT execute". A
-`hitl_requests` row is written with `status="pending"`, and the agent's tool call returns
+`HITL_GATED_TOOLS`: `modify_order`, `place_backorder` — are intercepted by
+`HITLFunctionMiddleware` *before* they execute. Customer cancellation and eligible return requests
+execute after their tools validate ownership and policy. A refund request is submitted for admin
+approval only after the returned item is received. Return requests more than thirty days after delivery
+are not eligible; once an eligible return is received, its refund is automatically queued without a
+second customer request. There is no separate refund window.
+For statically gated tools, the
+middleware's docstring is explicit about what happens next: "the tool does NOT execute". A
+`tool_approval_requests` row is written with `status="pending"`, and the agent's tool call returns
 immediately with a `pending_approval` result — the LLM's turn ends there, having been told the
 action is awaiting approval. When an admin later approves it, a *separate* code path,
 `execute_approved_action()`, runs the underlying database operation directly. **The
@@ -76,9 +81,8 @@ flowchart LR
   classDef infra   fill:#64748b,stroke:#334155,color:#ffffff
 
   subgraph mw["shared/hitl.py — tool mode"]
-    t1["model calls process_refund"] --> gate1["HITLFunctionMiddleware<br/>intercepts"]
-    gate1 --> block["tool does NOT execute<br/>LLM turn ends here"]
-    block -.later, separate path.-> exec["execute_approved_action()<br/>runs the DB write directly"]
+    t1["admin simulates receipt<br/>of shipped return"] --> review["Create refund approval request"]
+    review -.admin approves.-> exec["execute_approved_action()<br/>marks refund complete"]
   end
 
   subgraph wf["workflows/return_replace.py — workflow mode"]
@@ -87,8 +91,8 @@ flowchart LR
     cp -.resume, maybe different process.-> resume["on_approval() —<br/>graph continues from here"]
   end
 
-  class t1,t2,gate1,exec,resume core
-  class block,pause error
+  class t1,t2,policy,exec,resume core
+  class review,pause error
   class cp infra
 ```
 

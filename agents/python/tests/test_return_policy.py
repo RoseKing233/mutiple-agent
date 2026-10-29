@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from shared.return_policy import can_transition_return, evaluate_return_window
+from shared.return_policy import (
+    can_transition_return,
+    evaluate_return_window,
+)
 
 
 def test_return_window_includes_exactly_thirty_days_after_delivery() -> None:

@@ -51,8 +51,8 @@ export function toastOrderModified() {
 // ─── Returns ─────────────────────────────────────────────────────────────────
 
 export function toastReturnInitiated(returnId: string) {
-  toast.success("Return initiated", {
-    description: `Return #${returnId.slice(0, 8)} submitted. The label will be available after approval.`,
+  toast.success("Return approved", {
+    description: `Return #${returnId.slice(0, 8)} approved. The demo label is ready.`,
   });
 }
 

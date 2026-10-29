@@ -1,8 +1,9 @@
 """Human-in-the-Loop (HITL) approval middleware and DB helpers.
 
-High-stakes, irreversible tool calls (cancel_order, process_refund,
-initiate_return, modify_order, place_backorder) are intercepted before
-execution. Each call creates a ``hitl_requests`` record with status="pending".
+Admin-gated tool calls (modify_order and place_backorder) are intercepted
+before execution. Each call creates a ``tool_approval_requests`` record with
+status="pending". Eligible refund requests also create an approval record;
+refunds outside the eligibility rules are rejected by the refund tool.
 
 An admin reviews pending requests at /admin/approvals and either:
 - Approves: the approve handler directly executes the underlying DB operation
@@ -35,13 +36,11 @@ from shared.inventory_ledger import release_cancelled_order_inventory
 
 logger = logging.getLogger(__name__)
 
-# Tools that require human approval before executing.
-# Matches the @tool(approval_mode="always_require") decorators.
+# Tools that always require admin approval. Customer-requested cancellations
+# and return submissions execute after their tools validate eligibility.
+# A refund approval is queued automatically after an admin confirms receipt.
 HITL_GATED_TOOLS: frozenset[str] = frozenset({
-    "cancel_order",
     "modify_order",
-    "process_refund",
-    "initiate_return",
     "place_backorder",
 })
 
@@ -104,8 +103,7 @@ class HITLFunctionMiddleware(FunctionMiddleware):
             )
         except Exception:
             logger.exception("hitl: failed to create approval request for %s", tool_name)
-            # Fail CLOSED — a high-stakes tool (cancel_order, process_refund,
-            # initiate_return, modify_order, place_backorder) must never
+            # Fail CLOSED — a gated tool (modify_order, place_backorder) must never
             # execute unapproved just because the approval record couldn't
             # be written. Refuse the call the same way a denied request
             # would read to the caller, rather than silently letting it
@@ -303,7 +301,8 @@ async def resolve_hitl_request(
     """
     from shared.db import get_pool
     pool = get_pool()
-    final_status = "executed" if (decision == "approved" and execution_result) else decision
+    execution_succeeded = execution_result is not None and execution_result.get("success") is True
+    final_status = "executed" if decision == "approved" and execution_succeeded else decision
     result = await pool.execute(
         """UPDATE tool_approval_requests
            SET status = $1, admin_note = $2, approved_by = $3,
@@ -391,35 +390,48 @@ async def execute_approved_action(
         return {"success": False, "message": "Order not found or already processed."}
 
     if tool_name == "process_refund":
-        # process_refund (shared/tools/return_tools.py) takes `return_id`,
-        # not `order_id` — HITLFunctionMiddleware captures whatever the
-        # gated tool was actually called with, so tool_input always has
-        # `return_id` here, never `order_id`. This branch previously read
-        # tool_input.get("order_id", "") (always empty) and updated
-        # `orders` instead of `returns`, so approving a refund silently
-        # failed to find a match and never marked the return processed —
-        # fixed to match the real tool's shape: operate on `returns` by
-        # `return_id`, guarded by status so a double-execution (a retry
-        # that reaches this code despite the idempotency wrapper above,
-        # e.g. two different HITL requests for the same return) reports
-        # "already refunded" instead of a second success. A refund may only
-        # be marked complete after an admin confirms the return was received.
         return_id = tool_input.get("return_id", "")
+        refund_method = tool_input.get("refund_method")
+        if refund_method is not None and refund_method not in {"original_payment", "store_credit"}:
+            return {"success": False, "message": "Unsupported refund method."}
+
         async with pool.acquire() as conn:
             async with conn.transaction():
+                user_id = await conn.fetchval(
+                    "SELECT id FROM users WHERE email = $1 FOR UPDATE",
+                    user_email,
+                )
+                if user_id is None:
+                    return {"success": False, "message": "Return not found or access denied."}
+
+                ret = await conn.fetchrow(
+                    """SELECT r.id, r.order_id, r.status, r.refund_method, r.refund_amount
+                       FROM returns r
+                       WHERE r.id = $1 AND r.user_id = $2
+                       FOR UPDATE OF r""",
+                    return_id,
+                    user_id,
+                )
+                if not ret:
+                    return {"success": False, "message": "Return not found or access denied."}
+                if ret["status"] != "received":
+                    return {
+                        "success": False,
+                        "message": "The return must be marked received before a refund can be approved.",
+                    }
+
                 row = await conn.fetchrow(
-                    """UPDATE returns SET status = 'refunded', resolved_at = NOW()
-                       WHERE id = $1
-                         AND user_id = (SELECT id FROM users WHERE email = $2)
-                         AND status = 'received'
+                    """UPDATE returns SET status = 'refunded', resolved_at = NOW(),
+                              refund_method = COALESCE($2, refund_method)
+                       WHERE id = $1 AND status = 'received'
                        RETURNING id, order_id, refund_method, refund_amount""",
                     return_id,
-                    user_email,
+                    refund_method,
                 )
                 if row:
                     await conn.execute(
                         """INSERT INTO order_status_history (order_id, status, notes)
-                           VALUES ($1, 'returned', 'Demo refund marked complete after return receipt')""",
+                           VALUES ($1, 'refunded', 'Refund approved and marked complete')""",
                         row["order_id"],
                     )
         if row:
@@ -430,10 +442,9 @@ async def execute_approved_action(
                 "return_id": return_id,
                 "order_id": str(row["order_id"]),
                 "refunded_amount": amount,
-                "refund_mode": "simulated",
                 "message": (
-                    f"Demo refund of ${amount:.2f} marked complete via {method.replace('_', ' ')}. "
-                    "No payment provider is connected, so no money was transferred."
+                    f"Refund of ${amount:.2f} marked complete via {method.replace('_', ' ')}. "
+                    "No payment provider is connected."
                 ),
             }
         return {

@@ -58,6 +58,14 @@ def test_role_confinement_rejects_self_claimed_privilege() -> None:
     assert "i am an admin" in prompt  # explicitly names the escalation attempt
 
 
+def test_order_prompt_separates_return_and_refund_rules() -> None:
+    prompt = " ".join(load_prompt("order-management", "customer").lower().split())
+    assert "30-day request window" in prompt
+    assert "approved automatically" in prompt
+    assert "automatically adds it to admin approvals" in prompt
+    assert "no refund-only path" in prompt
+
+
 def test_prompt_is_role_aware() -> None:
     # The orchestrator has distinct customer vs admin role instructions.
     customer = load_prompt("orchestrator", "customer")

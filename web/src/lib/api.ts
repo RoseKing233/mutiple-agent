@@ -886,13 +886,12 @@ class ApiClient {
     });
   }
 
-  initiateReturn(orderId: string, reason: string, refundMethod: string) {
+  initiateReturn(orderId: string, reason: string, refundMethod = "original_payment") {
     return this.request<{
       return_id: string;
       order_id: string;
       status: string;
       return_label_url: string | null;
-      refund_amount: number;
       refund_method: string;
       message: string;
     }>(`/api/orders/${orderId}/return`, {
@@ -915,7 +914,7 @@ class ApiClient {
         order_id: string;
         reason: string;
         status: string;
-        refund_method: string;
+        refund_method: string | null;
         refund_amount: number | null;
         return_label_url: string | null;
         created_at: string;
@@ -926,14 +925,14 @@ class ApiClient {
 
   updateAdminReturnStatus(
     returnId: string,
-    status: "approved" | "denied" | "received" | "refunded",
+    status: "approved" | "denied" | "received",
   ) {
     return this.request<{
       return_id: string;
       order_id: string;
       status: string;
       return_label_url: string | null;
-      refund_mode: string | null;
+      refund_approval_id: string | null;
       message: string;
     }>(`/api/admin/returns/${returnId}/status`, {
       method: "POST",

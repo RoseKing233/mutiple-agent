@@ -113,7 +113,6 @@ class _InitiateReturnExecutor(Executor):
             result = await fn(
                 order_id=state.order_id,
                 reason=state.reason or "Customer requested replacement",
-                refund_method="store_credit",
             )
         except Exception as exc:
             state.errors.append(f"initiate_return: {exc}")

@@ -31,12 +31,18 @@ Change shipping address. Only works if not yet shipped.
 - new_address must have: street, city, state, zip, country
 
 ### check_return_eligibility(order_id)
-Check if an order can be returned (must be delivered within 30 days).
+Check if an order is within the 30-day return-request window from delivery.
 → Returns: {"eligible": true, "days_remaining": 15} or {"eligible": false, "reason": "..."}
 
 ### initiate_return(order_id, reason, refund_method)
-Start a return. refund_method: "original_payment" or "store_credit"
-→ Returns: {"return_id": "...", "label_url": "https://...", "status": "requested"}
+Submit a return request within 30 days of delivery. Eligible returns are approved automatically and the return label is ready.
+Choose "original_payment" or "store_credit" as the refund preference. After admin receipt confirmation, the refund is
+automatically submitted for admin approval.
+→ Returns: {"return_id": "...", "return_label_url": "/api/returns/token/label", "status": "approved"}
+
+### process_refund(return_id, refund_method)
+Submit a refund for admin approval only after the returned item is received. Receipt confirmation automatically
+submits this request; customers do not make a second request. The refund is not completed until approved.
 
 ### get_user_profile()
 Current user's profile. No parameters needed.

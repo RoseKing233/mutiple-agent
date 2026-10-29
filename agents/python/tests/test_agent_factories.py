@@ -65,3 +65,21 @@ def test_factory_composes_system_prompt(module: str, factory: str, expected_name
     mod = importlib.import_module(module)
     agent = getattr(mod, factory)()
     assert _options(agent).get("instructions")  # YAML-composed prompt is present
+
+
+def test_order_management_agent_exposes_customer_order_actions() -> None:
+    from order_management.agent import AGENT_TOOLS
+
+    names = {tool.name for tool in AGENT_TOOLS}
+    assert {
+        "get_user_orders",
+        "get_order_details",
+        "cancel_order",
+        "check_return_eligibility",
+        "initiate_return",
+        "get_return_status",
+        "process_refund",
+        "recall_memories",
+        "store_memory",
+        "add_to_cart",
+    } <= names

@@ -36,7 +36,7 @@ async def _not_eligible(order_id: str) -> dict[str, Any]:
     return {"eligible": False, "reason": "Past 30-day return window"}
 
 
-async def _initiate_ok(order_id: str, reason: str, refund_method: str) -> dict[str, Any]:
+async def _initiate_ok(order_id: str, reason: str) -> dict[str, Any]:
     return {"return_id": "ret-99", "refund_amount": 120.0}
 
 

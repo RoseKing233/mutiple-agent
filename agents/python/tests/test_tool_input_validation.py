@@ -23,7 +23,6 @@ from shared.tool_inputs import (
     validation_error_payload,
 )
 
-
 _GOOD_UUID = str(uuid4())
 _GOOD_ADDR = {
     "street": "123 Market St",
@@ -90,16 +89,18 @@ def test_modify_order_drops_unknown_address_keys() -> None:
 # ─────────────────────── InitiateReturnInput ───────────────────────
 
 
-def test_initiate_return_defaults_refund_method_to_original_payment() -> None:
-    parsed = InitiateReturnInput(order_id=_GOOD_UUID, reason="defective")
-    assert parsed.refund_method == "original_payment"
+def test_initiate_return_accepts_preferred_refund_method() -> None:
+    request = InitiateReturnInput(
+        order_id=_GOOD_UUID,
+        reason="defective",
+        refund_method="store_credit",
+    )
+    assert request.refund_method == "store_credit"
 
 
 def test_initiate_return_rejects_unknown_refund_method() -> None:
     with pytest.raises(ValidationError):
-        InitiateReturnInput(
-            order_id=_GOOD_UUID, reason="defective", refund_method="bitcoin"
-        )
+        InitiateReturnInput(order_id=_GOOD_UUID, reason="defective", refund_method="bitcoin")
 
 
 # ─────────────────────── ProcessRefundInput ───────────────────────
@@ -108,6 +109,11 @@ def test_initiate_return_rejects_unknown_refund_method() -> None:
 def test_process_refund_rejects_non_uuid() -> None:
     with pytest.raises(ValidationError):
         ProcessRefundInput(return_id="not-a-uuid")
+
+
+def test_process_refund_rejects_unknown_refund_method() -> None:
+    with pytest.raises(ValidationError):
+        ProcessRefundInput(return_id=_GOOD_UUID, refund_method="bitcoin")
 
 
 # ─────────────────────── error payload shape ───────────────────────

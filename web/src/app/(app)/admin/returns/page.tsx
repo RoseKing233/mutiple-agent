@@ -11,7 +11,7 @@ import { api, apiUrl } from "@/lib/api";
 import { toast } from "@/lib/toast";
 
 type ReturnRequest = Awaited<ReturnType<typeof api.getAdminReturns>>["returns"][number];
-type ReturnAction = "approved" | "denied" | "received" | "refunded";
+type ReturnAction = "approved" | "denied" | "received";
 
 function formatDate(value: string) {
   return new Date(value).toLocaleString();
@@ -83,7 +83,7 @@ export default function AdminReturnsPage() {
           <div>
             <h1 className="text-2xl font-bold">Return Requests</h1>
             <p className="text-sm text-muted-foreground">
-              Review requests, confirm receipt, and complete demo refunds.
+              Eligible returns are approved automatically. Simulate receipt after the customer ships the item.
             </p>
           </div>
         </div>
@@ -94,7 +94,7 @@ export default function AdminReturnsPage() {
       </div>
 
       <p className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
-        Payments are simulated. Marking a refund complete changes the demo return status only; it does not transfer money.
+        Receipt is a demo carrier event, not a live shipment update. Confirming receipt automatically queues a refund for approval in Admin Approvals; no money moves until it is approved.
       </p>
 
       {loading ? (
@@ -125,8 +125,8 @@ export default function AdminReturnsPage() {
                 <CardContent className="space-y-4">
                   <div className="grid gap-2 text-sm sm:grid-cols-2">
                     <p><span className="text-muted-foreground">Reason:</span> {item.reason}</p>
-                    <p><span className="text-muted-foreground">Refund method:</span> {item.refund_method}</p>
-                    <p><span className="text-muted-foreground">Amount:</span> {item.refund_amount == null ? "—" : `$${item.refund_amount.toFixed(2)}`}</p>
+                    {item.status === "received" && item.refund_method && <p><span className="text-muted-foreground">Refund method:</span> {item.refund_method}</p>}
+                    {item.status === "received" && item.refund_amount != null && <p><span className="text-muted-foreground">Refund amount for approval:</span> ${item.refund_amount.toFixed(2)}</p>}
                     <p><span className="text-muted-foreground">Return ID:</span> {item.id}</p>
                   </div>
                   {item.return_label_url && (
@@ -160,18 +160,17 @@ export default function AdminReturnsPage() {
                     {item.status === "shipped_back" && (
                       <Button size="sm" disabled={busy} onClick={() => void updateStatus(item, "received")}>
                         {busy && <Loader2 className="mr-2 size-4 animate-spin" />}
-                        Confirm Received
+                        Simulate Carrier Receipt
                       </Button>
                     )}
                     {item.status === "received" && (
-                      <Button size="sm" disabled={busy} onClick={() => void updateStatus(item, "refunded")}>
-                        {busy && <Loader2 className="mr-2 size-4 animate-spin" />}
-                        Mark Demo Refund Complete
-                      </Button>
+                      <p className="text-sm text-muted-foreground">
+                        Receipt confirmed. The refund is queued in Admin Approvals; no customer action is needed.
+                      </p>
                     )}
                     {item.status === "approved" && (
                       <p className="text-sm text-muted-foreground">
-                        Waiting for the customer to ship the item back.
+                        Waiting for the customer to mark the demo return shipment as sent.
                       </p>
                     )}
                   </div>

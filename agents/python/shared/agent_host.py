@@ -59,9 +59,13 @@ def _run_options(user_message: str = "", agent_name: str = "") -> dict[str, Any]
     from shared.config import settings
     from shared.context import current_user_role
     from shared.forecasting.chat_policy import required_report_tool
+    from shared.order_management.chat_policy import required_order_tool
 
     options: dict[str, Any] = {"temperature": settings.LLM_TEMPERATURE}
-    required = required_report_tool(user_message, agent_name, current_user_role.get())
+    role = current_user_role.get()
+    required = required_order_tool(user_message, agent_name, role) or required_report_tool(
+        user_message, agent_name, role
+    )
     if required:
         # MAF resets a required choice after executing the first tool, then
         # resumes its normal loop. No custom retry/tool-calling loop is used.

@@ -24,6 +24,21 @@ def evaluate_return_window(
     delivered_at: datetime | None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
+    return _evaluate_window(
+        window=RETURN_WINDOW,
+        order_created_at=order_created_at,
+        delivered_at=delivered_at,
+        now=now,
+    )
+
+
+def _evaluate_window(
+    *,
+    window: timedelta,
+    order_created_at: datetime,
+    delivered_at: datetime | None,
+    now: datetime | None,
+) -> dict[str, Any]:
     reference_time = delivered_at or order_created_at
     current_time = now or datetime.now(UTC)
     if reference_time.tzinfo is None:
@@ -31,7 +46,7 @@ def evaluate_return_window(
     if current_time.tzinfo is None:
         current_time = current_time.replace(tzinfo=UTC)
 
-    deadline = reference_time + RETURN_WINDOW
+    deadline = reference_time + window
     seconds_remaining = (deadline - current_time).total_seconds()
     days_since = max(0, (current_time - reference_time).days)
     return {

@@ -13,6 +13,7 @@ This flow spans four agents: Order Management checks return eligibility and init
 ```mermaid
 sequenceDiagram
     actor User
+    actor Admin
     participant FE as Next.js Frontend
     participant ORCH as Orchestrator<br/>(FastAPI :8080)
     participant LLM as OpenAI / Azure OpenAI
@@ -38,12 +39,16 @@ sequenceDiagram
         OM->>DB: SELECT orders + order_items<br/>WHERE user_email, category='Clothing'
         DB-->>OM: Recent jacket order found
         LLM-->>OM: Tool: check_return_eligibility(order_id)
-        OM->>DB: Check order date vs 30-day window
+        OM->>DB: Check delivery date vs 30-day return window
         DB-->>OM: Eligible for return
-        LLM-->>OM: Tool: initiate_return(order_id, reason)
-        OM->>DB: INSERT INTO returns<br/>status='requested'
-        DB-->>OM: Return created, label generated
-        OM-->>ORCH: Return initiated, refund: $89.99 store credit<br/>Return label URL provided
+        LLM-->>OM: Tool: initiate_return(order_id, reason, refund_method)
+        OM->>DB: INSERT INTO returns<br/>status='approved', demo label
+        DB-->>OM: Return automatically approved
+        OM-->>ORCH: Return label URL provided<br/>Refund preference recorded
+        Admin->>DB: Simulate return receipt
+        DB->>DB: Insert process_refund approval request
+        Admin->>DB: Approve refund in Admin Approvals
+        DB-->>OM: Mark demo return refunded<br/>No money is transferred
     end
 
     ORCH->>LLM: Process OM response, continue routing

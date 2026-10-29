@@ -199,10 +199,9 @@ class Settings(BaseSettings):
     LANGFUSE_HOST: str = "https://cloud.langfuse.com"
 
     # ── HITL (Human-in-the-Loop) approval queue ─────────────────────
-    # When enabled, high-stakes tools (cancel_order, process_refund,
-    # initiate_return, modify_order, place_backorder) require admin approval
-    # before executing. Requests queue in the hitl_requests DB table and are
-    # reviewed at /admin/approvals.
+    # When enabled, tools in HITL_GATED_TOOLS require admin approval.
+    # Eligible customer cancellations and return submissions execute directly;
+    # refunds escalate dynamically when timing or history rules require review.
     HITL_ENABLED: bool = True
 
     # ── MCP integration (optional, flag-gated) ──────────────────────

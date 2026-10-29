@@ -89,23 +89,31 @@ class ModifyOrderInput(BaseModel):
 
 class InitiateReturnInput(BaseModel):
     order_id: UUID
-    reason: str = Field(min_length=1, max_length=_REASON_MAX)
-    refund_method: str = Field(default="original_payment")
+    reason: str = Field(min_length=1, max_length=255)
+    refund_method: str = "original_payment"
 
     model_config = {"extra": "forbid", "str_strip_whitespace": True}
 
     @field_validator("refund_method")
     @classmethod
-    def _refund_method_known(cls, v: str) -> str:
-        if v not in {"original_payment", "store_credit"}:
+    def _refund_method_known(cls, value: str) -> str:
+        if value not in {"original_payment", "store_credit"}:
             raise ValueError("refund_method must be 'original_payment' or 'store_credit'")
-        return v
+        return value
 
 
 class ProcessRefundInput(BaseModel):
     return_id: UUID
+    refund_method: str = "original_payment"
 
     model_config = {"extra": "forbid"}
+
+    @field_validator("refund_method")
+    @classmethod
+    def _refund_method_known(cls, value: str) -> str:
+        if value not in {"original_payment", "store_credit"}:
+            raise ValueError("refund_method must be 'original_payment' or 'store_credit'")
+        return value
 
 
 # ─────────────────────── Helper ───────────────────────

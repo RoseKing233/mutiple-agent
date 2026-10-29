@@ -83,9 +83,10 @@ function formatTs(iso: string): string {
 
 function inputSummary(tool: string, input: Record<string, unknown>): string {
   if (tool === "cancel_order" || tool === "process_refund" || tool === "modify_order") {
-    const id = String(input.order_id ?? "").slice(0, 8);
+    const id = String(input.order_id ?? input.return_id ?? "").slice(0, 8);
     const reason = input.reason ? ` — "${input.reason}"` : "";
-    return `Order #${id}${reason}`;
+    const label = tool === "process_refund" ? "Return" : "Order";
+    return `${label} #${id}${reason}`;
   }
   if (tool === "initiate_return") {
     const id = String(input.order_id ?? "").slice(0, 8);
@@ -142,7 +143,7 @@ export default function AdminApprovalsPage() {
           description: msg,
         });
       } else {
-        toast(`Approved — but execution issue`, { description: msg });
+        toast(`Not approved: ${TOOL_LABELS[req.tool_name] ?? req.tool_name}`, { description: msg });
       }
       await load();
     } catch {

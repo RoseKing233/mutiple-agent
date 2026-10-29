@@ -15,7 +15,9 @@ order: |
   - **returns**: order_id (FK->orders), user_id (FK->users), reason, status, return_label_url, refund_method, refund_amount, created_at, resolved_at
     - Return statuses: requested -> approved -> shipped_back -> received -> refunded (or denied)
     - Refund methods: original_payment, store_credit
-    - Return window: 30 days from delivery
+    - Return request window: 30 days from delivery
+    - Eligible returns are approved automatically; after receipt, refunds are automatically submitted for admin approval
+    - A refund requires a received return; there is no refund-only request or separate refund time limit
 
 product: |
   ## Database: Products

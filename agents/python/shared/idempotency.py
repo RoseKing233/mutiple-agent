@@ -1,14 +1,10 @@
 """Idempotency-key infrastructure for money-moving tool calls and routes.
 
-Problem this closes: nothing in this codebase detects "this exact request
-already succeeded" — a client that times out waiting for a response and
-retries (or a user double-clicking "issue refund") re-executes the
-underlying DB mutation a second time. `initiate_return`/`process_refund`
-(``shared/tools/return_tools.py``) already guard against two *concurrent*
-calls racing each other (row locks + status checks), which is a different
-problem: it stops two simultaneous attempts from both succeeding, but a
-*sequential* retry after the first attempt already committed just hits an
-"already refunded" error today instead of replaying the original success.
+Problem this closes: a client that retries after a timeout could repeat a
+database mutation or submit duplicate work. Return creation, refund approval
+execution, and checkout use this wrapper to replay successful operations;
+refund request submission rechecks current eligibility and reuses an existing
+pending admin approval instead of caching an outdated policy result.
 
 The protocol, backed by the ``idempotency_keys`` table
 (``docker/postgres/init.sql``):

@@ -1,33 +1,31 @@
-"""
-Audit fix #4 — every destructive (state-mutating, hard-to-undo) tool
-must be wired with ``approval_mode="always_require"`` so MAF emits an
-approval request to the host instead of executing the function blind.
-
-Read-only tools (lookups, listings, sentiment summaries) stay
-``never_require``; cart mutations are deliberately *not* gated because
-they're easy to undo and the friction would dominate the chat UX.
-"""
+"""Assert which order actions execute after policy checks and which need admin review."""
 
 from __future__ import annotations
 
 import pytest
 
-
 # ─────────────────────── Tool inventory ──────────────────────────
 
 
-def _required_approval_tools():
+def _always_approval_tools():
     """Lazy import so collection doesn't trip the prod-fail-fast guard."""
     from inventory_fulfillment.tools import place_backorder
-    from order_management.tools import cancel_order, modify_order
+    from order_management.tools import modify_order
+
+    return [
+        ("modify_order", modify_order),
+        ("place_backorder", place_backorder),
+    ]
+
+
+def _customer_order_tools():
+    from order_management.tools import cancel_order
     from shared.tools.return_tools import initiate_return, process_refund
 
     return [
         ("cancel_order", cancel_order),
-        ("modify_order", modify_order),
         ("initiate_return", initiate_return),
         ("process_refund", process_refund),
-        ("place_backorder", place_backorder),
     ]
 
 
@@ -46,13 +44,25 @@ def _read_only_tools():
 # ─────────────────────── Assertions ───────────────────────────────
 
 
-@pytest.mark.parametrize("name,tool", _required_approval_tools())
-def test_destructive_tool_requires_approval(name: str, tool) -> None:
+@pytest.mark.parametrize("name,tool", _always_approval_tools())
+def test_admin_sensitive_tool_requires_approval(name: str, tool) -> None:
     assert tool.approval_mode == "always_require", (
-        f"{name} must be wired with approval_mode='always_require' so the "
-        "front-end / HITL layer can confirm before the LLM cancels orders, "
-        "issues refunds, modifies addresses or commits backorders."
+        f"{name} must remain gated because it requires admin review."
     )
+
+
+@pytest.mark.parametrize("name,tool", _customer_order_tools())
+def test_eligible_customer_order_actions_can_execute_without_global_approval(name: str, tool) -> None:
+    assert tool.approval_mode == "never_require", (
+        f"{name} performs its own ownership and eligibility checks; "
+        "eligible refunds submit a separate admin approval request."
+    )
+
+
+def test_customer_order_actions_are_not_in_the_unconditional_hitl_gate() -> None:
+    from shared.hitl import HITL_GATED_TOOLS
+
+    assert {"cancel_order", "initiate_return", "process_refund"}.isdisjoint(HITL_GATED_TOOLS)
 
 
 @pytest.mark.parametrize("name,tool", _read_only_tools())

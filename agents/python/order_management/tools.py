@@ -225,8 +225,7 @@ async def get_order_tracking(
 
 @tool(
     name="cancel_order",
-    description="Cancel an order. Only orders in 'placed' or 'confirmed' status can be cancelled.",
-    approval_mode="always_require",
+    description="Cancel an owned order only when its status is 'placed' or 'confirmed'.",
 )
 @requires_role("customer", "seller", "admin")
 async def cancel_order(
@@ -252,7 +251,7 @@ async def cancel_order(
         # behind us instead of double-cancelling.
         async with conn.transaction():
             order = await conn.fetchrow(
-                """SELECT o.id, o.status, o.total
+                """SELECT o.id, o.status
                    FROM orders o
                    JOIN users u ON o.user_id = u.id
                    WHERE o.id = $1 AND u.email = $2
@@ -288,14 +287,7 @@ async def cancel_order(
                 "previous_status": order["status"],
                 "new_status": "cancelled",
                 "reason": reason,
-                "refund_amount": float(order["total"]),
-                "refund_status": "not_processed",
-                "refund_mode": "not_connected",
                 "inventory_released_units": inventory_released,
-                "message": (
-                    "Order cancelled successfully. This demo checkout is not connected "
-                    "to a payment provider, so no real refund has been issued."
-                ),
             }
 
 

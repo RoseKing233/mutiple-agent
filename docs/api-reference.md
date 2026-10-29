@@ -525,6 +525,36 @@ When a return exists, the `return` field contains:
 }
 ```
 
+Eligible returns are limited to 30 days from delivery and are approved automatically. The response includes a return
+label and the customer's preferred refund method. After the item is marked shipped, an admin simulates receipt
+from the Returns page; this automatically creates a pending refund approval. The order remains `returned` while the
+return status moves through `approved`, `shipped_back`, `received`, and `refunded`. A refund cannot be requested
+without a return and a received item. Refund approval records the completed status; no payment provider is connected.
+
+### POST /api/orders/{order_id}/return
+
+Submit an eligible return. Eligible returns are approved immediately.
+
+**Request**
+
+```json
+{
+  "reason": "Wrong size",
+  "refund_method": "original_payment"
+}
+```
+
+`refund_method` may be `original_payment` or `store_credit`; it defaults to `original_payment`.
+
+### POST /api/orders/{order_id}/return/shipped
+
+Record the customer's demo return shipment. This is not a carrier tracking integration.
+
+### POST /api/admin/returns/{return_id}/status
+
+The admin can simulate receipt by setting the status to `received`. This atomically queues the refund for approval
+in Admin Approvals. Setting the status directly to `refunded` returns `409`; refunds must pass the approval flow.
+
 **Errors**
 - `404` Order not found or doesn't belong to the user
 

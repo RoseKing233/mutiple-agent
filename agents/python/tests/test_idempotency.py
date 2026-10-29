@@ -7,8 +7,7 @@ never mock the database. Covers, in order:
    function: reserve, replay-on-completed, conflict-on-fresh-in-progress,
    reclaim-on-stale-in-progress, release-on-exception.
 2. ``initiate_return``/``process_refund`` (``shared/tools/return_tools.py``)
-   actually deduping a sequential retry with identical args instead of
-   hitting their own "already returned"/"already refunded" error paths.
+   deduping repeated return or refund-approval submissions.
 3. ``shared/hitl.py``'s fail-closed behavior when the approval record can't
    be written (previously failed open — let the gated tool execute
    unapproved).
@@ -76,6 +75,20 @@ async def _seed_order(
         total,
     )
     return order_id
+
+
+async def _seed_delivery_event(
+    pool: asyncpg.Pool,
+    order_id: uuid.UUID,
+    *,
+    delivered_at: datetime | None = None,
+) -> None:
+    await pool.execute(
+        """INSERT INTO order_status_history (order_id, status, notes, timestamp)
+           VALUES ($1, 'delivered', 'Test delivery', $2)""",
+        order_id,
+        delivered_at or datetime.now(UTC),
+    )
 
 
 async def _seed_return(
@@ -237,6 +250,15 @@ async def test_initiate_return_retry_replays_the_original_return_instead_of_erro
 
     first = await initiate_return(order_id=str(order_id), reason="wrong size")
     assert "return_id" in first
+    assert first["status"] == "approved"
+    assert first["return_label_url"]
+    assert first["refund_method"] == "original_payment"
+    stored = await db_pool.fetchrow(
+        "SELECT refund_method, refund_amount FROM returns WHERE id = $1",
+        first["return_id"],
+    )
+    assert stored["refund_method"] == "original_payment"
+    assert stored["refund_amount"] == 50.0
 
     second = await initiate_return(order_id=str(order_id), reason="wrong size")
     assert second == first, "an identical retry must replay the original success, not hit 'already initiated'"
@@ -263,23 +285,89 @@ async def test_initiate_return_rejects_order_outside_the_return_window(db_pool: 
     assert count == 0
 
 
-async def test_process_refund_retry_replays_the_original_refund_instead_of_erroring(db_pool: asyncpg.Pool) -> None:
-    from shared.tools.return_tools import process_refund
+async def test_initiate_return_remains_eligible_through_thirty_days(db_pool: asyncpg.Pool) -> None:
+    from shared.tools.return_tools import initiate_return
+
+    user_id = await _seed_user(db_pool, email="return-window@example.com")
+    order_id = await _seed_order(db_pool, status="delivered", total=50.0, user_id=user_id)
+    delivered_at = datetime.now(UTC) - timedelta(days=29)
+    await db_pool.execute("UPDATE orders SET created_at = $2 WHERE id = $1", order_id, delivered_at)
+    await _seed_delivery_event(db_pool, order_id, delivered_at=delivered_at)
+    current_user_email.set("return-window@example.com")
+
+    result = await initiate_return(order_id=str(order_id), reason="item arrived damaged")
+
+    assert result["status"] == "approved"
+    assert result["return_id"]
+
+
+async def test_recent_refunds_do_not_block_or_escalate_a_return_request(db_pool: asyncpg.Pool) -> None:
+    from shared.tools.return_tools import initiate_return
+
+    user_id = await _seed_user(db_pool, email="return-after-refunds@example.com")
+    for _ in range(2):
+        prior_order_id = await _seed_order(db_pool, user_id, status="returned", total=20.0)
+        prior_return_id = await _seed_return(
+            db_pool, prior_order_id, user_id, status="refunded", refund_amount=20.0
+        )
+        await db_pool.execute(
+            "UPDATE returns SET resolved_at = NOW() - INTERVAL '10 days' WHERE id = $1",
+            prior_return_id,
+        )
+
+    order_id = await _seed_order(db_pool, user_id, status="delivered", total=50.0)
+    await _seed_delivery_event(db_pool, order_id)
+    current_user_email.set("return-after-refunds@example.com")
+    current_user_role.set("customer")
+
+    result = await initiate_return(order_id=str(order_id), reason="item arrived damaged")
+
+    assert result["status"] == "approved"
+    assert result["return_id"]
+    assert await db_pool.fetchval(
+        "SELECT COUNT(*) FROM tool_approval_requests WHERE user_email = $1",
+        "return-after-refunds@example.com",
+    ) == 0
+
+
+async def test_process_refund_submits_one_approval_request_on_retry(db_pool: asyncpg.Pool) -> None:
+    from shared.tools.return_tools import get_return_status, process_refund
 
     user_id = await _seed_user(db_pool, email="refund-retry@example.com")
     order_id = await _seed_order(db_pool, user_id, status="returned", total=75.0)
+    await _seed_delivery_event(db_pool, order_id)
     return_id = await _seed_return(db_pool, order_id, user_id, status="received", refund_amount=75.0)
     current_user_email.set("refund-retry@example.com")
     current_user_role.set("customer")
 
-    first = await process_refund(return_id=str(return_id))
-    assert first["status"] == "refunded"
+    first = await process_refund(return_id=str(return_id), refund_method="store_credit")
+    assert first["status"] == "pending_approval"
 
-    second = await process_refund(return_id=str(return_id))
-    assert second == first, "an identical retry must replay the original refund, not hit 'already refunded'"
+    second = await process_refund(return_id=str(return_id), refund_method="original_payment")
+    assert second["request_id"] == first["request_id"], "retry must reuse the pending admin approval"
+    assert second["refund_method"] == "store_credit"
+    request_input = await db_pool.fetchval(
+        "SELECT tool_input->>'refund_method' FROM tool_approval_requests WHERE id = $1",
+        first["request_id"],
+    )
+    assert request_input == "store_credit"
+    assert await db_pool.fetchval("SELECT refund_method FROM returns WHERE id = $1", return_id) == "store_credit"
 
     row = await db_pool.fetchrow("SELECT status FROM returns WHERE id = $1", return_id)
-    assert row["status"] == "refunded"
+    assert row["status"] == "received"
+    assert await db_pool.fetchval("SELECT COUNT(*) FROM tool_approval_requests WHERE tool_name = 'process_refund'") == 1
+
+    return_status = await get_return_status(order_id=str(order_id))
+    assert return_status["refund_approval_status"] == "pending"
+    assert "awaiting admin approval" in return_status["message"]
+
+    await db_pool.execute(
+        "UPDATE tool_approval_requests SET status = 'denied' WHERE id = $1",
+        first["request_id"],
+    )
+    return_status = await get_return_status(order_id=str(order_id))
+    assert return_status["refund_approval_status"] == "denied"
+    assert "was denied by an admin" in return_status["message"]
 
 
 async def test_process_refund_refuses_before_return_is_received(db_pool: asyncpg.Pool) -> None:
@@ -287,6 +375,7 @@ async def test_process_refund_refuses_before_return_is_received(db_pool: asyncpg
 
     user_id = await _seed_user(db_pool, email="refund-early@example.com")
     order_id = await _seed_order(db_pool, user_id, status="returned", total=75.0)
+    await _seed_delivery_event(db_pool, order_id)
     return_id = await _seed_return(db_pool, order_id, user_id, status="requested", refund_amount=75.0)
     current_user_email.set("refund-early@example.com")
     current_user_role.set("customer")
@@ -297,9 +386,179 @@ async def test_process_refund_refuses_before_return_is_received(db_pool: asyncpg
     assert result["current_status"] == "requested"
     await db_pool.execute("UPDATE returns SET status = 'received' WHERE id = $1", return_id)
     retry = await process_refund(return_id=str(return_id))
-    assert retry["status"] == "refunded", "a state-corrected retry must not replay the earlier business error"
+    assert retry["status"] == "pending_approval", "a state-corrected retry must submit for admin approval"
     status = await db_pool.fetchval("SELECT status FROM returns WHERE id = $1", return_id)
-    assert status == "refunded"
+    assert status == "received"
+
+
+async def test_process_refund_has_no_separate_window(db_pool: asyncpg.Pool) -> None:
+    from shared.tools.return_tools import process_refund
+
+    user_id = await _seed_user(db_pool, email="refund-window@example.com")
+    order_id = await _seed_order(db_pool, user_id, status="returned", total=75.0)
+    await _seed_delivery_event(db_pool, order_id, delivered_at=datetime.now(UTC) - timedelta(days=8))
+    return_id = await _seed_return(db_pool, order_id, user_id, status="received", refund_amount=75.0)
+    current_user_email.set("refund-window@example.com")
+    current_user_role.set("customer")
+
+    result = await process_refund(return_id=str(return_id))
+
+    assert result["status"] == "pending_approval"
+    assert "awaiting admin approval" in result["message"]
+    assert await db_pool.fetchval("SELECT status FROM returns WHERE id = $1", return_id) == "received"
+    assert await db_pool.fetchval("SELECT COUNT(*) FROM tool_approval_requests WHERE tool_name = 'process_refund'") == 1
+
+
+async def test_process_refund_is_not_blocked_by_recent_refunds(db_pool: asyncpg.Pool) -> None:
+    from shared.tools.return_tools import process_refund
+
+    user_id = await _seed_user(db_pool, email="refund-repeat@example.com")
+    for _ in range(2):
+        order_id = await _seed_order(db_pool, user_id, status="returned", total=20.0)
+        prior_return_id = await _seed_return(db_pool, order_id, user_id, status="refunded", refund_amount=20.0)
+        await db_pool.execute(
+            "UPDATE returns SET resolved_at = NOW() - INTERVAL '2 days' WHERE id = $1",
+            prior_return_id,
+        )
+
+    order_id = await _seed_order(db_pool, user_id, status="returned", total=75.0)
+    await _seed_delivery_event(db_pool, order_id)
+    return_id = await _seed_return(db_pool, order_id, user_id, status="received", refund_amount=75.0)
+    current_user_email.set("refund-repeat@example.com")
+    current_user_role.set("customer")
+
+    result = await process_refund(return_id=str(return_id))
+
+    assert result["status"] == "pending_approval"
+    assert await db_pool.fetchval("SELECT status FROM returns WHERE id = $1", return_id) == "received"
+    assert await db_pool.fetchval("SELECT COUNT(*) FROM tool_approval_requests WHERE tool_name = 'process_refund'") == 1
+
+
+async def test_admin_return_status_cannot_bypass_refund_approval(db_pool: asyncpg.Pool) -> None:
+    from fastapi import HTTPException
+
+    from orchestrator.routes.legacy import ReturnStatusRequest, update_admin_return_status
+
+    user_id = await _seed_user(db_pool, email="direct-refund-route@example.com")
+    order_id = await _seed_order(db_pool, user_id, status="returned", total=35.0)
+    return_id = await _seed_return(db_pool, order_id, user_id, status="received", refund_amount=35.0)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await update_admin_return_status(str(return_id), ReturnStatusRequest(status="refunded"))
+
+    assert exc_info.value.status_code == 409
+    assert "Admin Approvals" in exc_info.value.detail
+    assert await db_pool.fetchval("SELECT status FROM returns WHERE id = $1", return_id) == "received"
+
+
+async def test_return_api_auto_approves_eligible_request_and_stores_refund_preference(
+    db_pool: asyncpg.Pool,
+) -> None:
+    from orchestrator.routes.legacy import ReturnOrderRequest, return_order
+
+    user_id = await _seed_user(db_pool, email="auto-return@example.com")
+    order_id = await _seed_order(db_pool, user_id, status="delivered", total=35.0)
+    await _seed_delivery_event(db_pool, order_id)
+    current_user_email.set("auto-return@example.com")
+
+    result = await return_order(
+        str(order_id),
+        ReturnOrderRequest(reason="wrong size", refund_method="store_credit"),
+        user={},
+    )
+
+    assert result["status"] == "approved"
+    assert result["return_label_url"]
+    row = await db_pool.fetchrow(
+        "SELECT status, refund_method, refund_amount FROM returns WHERE id = $1",
+        result["return_id"],
+    )
+    assert row["status"] == "approved"
+    assert row["refund_method"] == "store_credit"
+    assert row["refund_amount"] == 35.0
+    assert await db_pool.fetchval(
+        "SELECT status FROM order_status_history WHERE order_id = $1 ORDER BY timestamp DESC LIMIT 1",
+        order_id,
+    ) == "approved"
+    assert await db_pool.fetchval(
+        "SELECT COUNT(*) FROM tool_approval_requests WHERE tool_name = 'process_refund'"
+    ) == 0
+
+
+async def test_simulated_return_receipt_automatically_queues_refund_approval(
+    db_pool: asyncpg.Pool,
+) -> None:
+    from orchestrator.routes.legacy import ReturnStatusRequest, update_admin_return_status
+
+    user_id = await _seed_user(db_pool, email="mock-receipt@example.com")
+    order_id = await _seed_order(db_pool, user_id, status="returned", total=35.0)
+    return_id = await _seed_return(
+        db_pool,
+        order_id,
+        user_id,
+        status="shipped_back",
+        refund_amount=35.0,
+    )
+
+    result = await update_admin_return_status(str(return_id), ReturnStatusRequest(status="received"))
+
+    assert result["status"] == "received"
+    assert result["refund_approval_id"]
+    assert "automatically added to Admin Approvals" in result["message"]
+    request = await db_pool.fetchrow(
+        "SELECT status, tool_input->>'return_id' AS return_id FROM tool_approval_requests WHERE id = $1",
+        result["refund_approval_id"],
+    )
+    assert request["status"] == "pending"
+    assert request["return_id"] == str(return_id)
+    assert await db_pool.fetchval("SELECT status FROM returns WHERE id = $1", return_id) == "received"
+    assert await db_pool.fetchval("SELECT status FROM orders WHERE id = $1", order_id) == "returned"
+    assert await db_pool.fetchval(
+        "SELECT status FROM order_status_history WHERE order_id = $1 ORDER BY timestamp DESC LIMIT 1",
+        order_id,
+    ) == "received"
+
+
+async def test_refund_request_is_queued_even_after_prior_refund(db_pool: asyncpg.Pool) -> None:
+    from shared.tools.return_tools import process_refund
+
+    user_id = await _seed_user(db_pool, email="refund-one-prior@example.com")
+    prior_order_id = await _seed_order(db_pool, user_id, status="returned", total=20.0)
+    prior_return_id = await _seed_return(db_pool, prior_order_id, user_id, status="refunded", refund_amount=20.0)
+    await db_pool.execute(
+        "UPDATE returns SET resolved_at = NOW() - INTERVAL '2 days' WHERE id = $1",
+        prior_return_id,
+    )
+
+    order_id = await _seed_order(db_pool, user_id, status="returned", total=75.0)
+    await _seed_delivery_event(db_pool, order_id)
+    return_id = await _seed_return(db_pool, order_id, user_id, status="received", refund_amount=75.0)
+    current_user_email.set("refund-one-prior@example.com")
+    current_user_role.set("customer")
+
+    result = await process_refund(return_id=str(return_id))
+
+    assert result["status"] == "pending_approval"
+    assert "awaiting admin approval" in result["message"].lower()
+    assert await db_pool.fetchval("SELECT status FROM returns WHERE id = $1", return_id) == "received"
+    assert await db_pool.fetchval("SELECT COUNT(*) FROM tool_approval_requests WHERE tool_name = 'process_refund'") == 1
+
+
+async def test_process_refund_does_not_require_delivery_history(db_pool: asyncpg.Pool) -> None:
+    from shared.tools.return_tools import process_refund
+
+    user_id = await _seed_user(db_pool, email="refund-unknown@example.com")
+    order_id = await _seed_order(db_pool, user_id, status="returned", total=30.0)
+    return_id = await _seed_return(db_pool, order_id, user_id, status="received", refund_amount=30.0)
+    current_user_email.set("refund-unknown@example.com")
+    current_user_role.set("customer")
+
+    result = await process_refund(return_id=str(return_id))
+
+    assert result["status"] == "pending_approval"
+    assert "awaiting admin approval" in result["message"].lower()
+    assert "no refund has been processed" in result["message"].lower()
+    assert await db_pool.fetchval("SELECT status FROM returns WHERE id = $1", return_id) == "received"
 
 
 async def test_denied_return_revokes_existing_label(db_pool: asyncpg.Pool) -> None:
@@ -326,7 +585,9 @@ async def test_denied_return_revokes_existing_label(db_pool: asyncpg.Pool) -> No
 # ─────────────────────── 3. hitl.py fail-closed ───────────────────────────
 
 
-async def test_hitl_fails_closed_when_approval_record_write_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_hitl_gated_action_fails_closed_when_approval_record_write_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from agent_framework._middleware import FunctionInvocationContext
 
     from shared.config import settings
@@ -346,11 +607,11 @@ async def test_hitl_fails_closed_when_approval_record_write_fails(monkeypatch: p
         called_next = True
 
     class _Fn:
-        name = "process_refund"
+        name = "modify_order"
 
     ctx = FunctionInvocationContext.__new__(FunctionInvocationContext)
     ctx.function = _Fn()
-    ctx.arguments = {"return_id": "abc"}
+    ctx.arguments = {"order_id": "abc", "new_address": {}}
     ctx.result = None
 
     middleware = HITLFunctionMiddleware()
@@ -382,15 +643,77 @@ async def test_execute_approved_action_process_refund_operates_on_the_real_retur
 
     result = await execute_approved_action(
         tool_name="process_refund",
-        tool_input={"return_id": str(return_id)},
+        tool_input={"return_id": str(return_id), "refund_method": "store_credit"},
         user_email="admin-approve@example.com",
     )
 
     assert result["success"] is True
     assert result["refunded_amount"] == 42.0
-    assert result["refund_mode"] == "simulated"
+    assert "refund_mode" not in result
     row = await db_pool.fetchrow("SELECT status FROM returns WHERE id = $1", return_id)
     assert row["status"] == "refunded"
+    assert await db_pool.fetchval(
+        "SELECT status FROM order_status_history WHERE order_id = $1 ORDER BY timestamp DESC LIMIT 1",
+        order_id,
+    ) == "refunded"
+    assert await db_pool.fetchval("SELECT refund_method FROM returns WHERE id = $1", return_id) == "store_credit"
+
+
+async def test_hitl_refund_approval_is_not_blocked_by_return_window(db_pool: asyncpg.Pool) -> None:
+    from shared.hitl import execute_approved_action
+    from shared.tools.return_tools import process_refund
+
+    user_id = await _seed_user(db_pool, email="late-refund-approval@example.com")
+    order_id = await _seed_order(db_pool, user_id, status="returned", total=42.0)
+    await _seed_delivery_event(db_pool, order_id)
+    return_id = await _seed_return(db_pool, order_id, user_id, status="received", refund_amount=42.0)
+    current_user_email.set("late-refund-approval@example.com")
+    current_user_role.set("customer")
+
+    request = await process_refund(return_id=str(return_id))
+    assert request["status"] == "pending_approval"
+    await db_pool.execute(
+        """UPDATE order_status_history SET timestamp = NOW() - INTERVAL '8 days'
+           WHERE order_id = $1 AND status = 'delivered'""",
+        order_id,
+    )
+
+    result = await execute_approved_action(
+        tool_name="process_refund",
+        tool_input={"return_id": str(return_id), "refund_method": "original_payment"},
+        user_email="late-refund-approval@example.com",
+    )
+
+    assert result["success"] is True
+    assert await db_pool.fetchval("SELECT status FROM returns WHERE id = $1", return_id) == "refunded"
+
+
+async def test_hitl_refund_approval_is_not_blocked_by_recent_refunds(db_pool: asyncpg.Pool) -> None:
+    from shared.hitl import execute_approved_action
+    from shared.tools.return_tools import process_refund
+
+    user_id = await _seed_user(db_pool, email="repeat-refund-approval@example.com")
+    order_id = await _seed_order(db_pool, user_id, status="returned", total=42.0)
+    await _seed_delivery_event(db_pool, order_id)
+    return_id = await _seed_return(db_pool, order_id, user_id, status="received", refund_amount=42.0)
+    current_user_email.set("repeat-refund-approval@example.com")
+    current_user_role.set("customer")
+
+    request = await process_refund(return_id=str(return_id))
+    assert request["status"] == "pending_approval"
+    for _ in range(2):
+        prior_order_id = await _seed_order(db_pool, user_id, status="returned", total=20.0)
+        prior_return_id = await _seed_return(db_pool, prior_order_id, user_id, status="refunded", refund_amount=20.0)
+        await db_pool.execute("UPDATE returns SET resolved_at = NOW() WHERE id = $1", prior_return_id)
+
+    result = await execute_approved_action(
+        tool_name="process_refund",
+        tool_input={"return_id": str(return_id), "refund_method": "original_payment"},
+        user_email="repeat-refund-approval@example.com",
+    )
+
+    assert result["success"] is True
+    assert await db_pool.fetchval("SELECT status FROM returns WHERE id = $1", return_id) == "refunded"
 
 
 async def test_execute_approved_action_process_refund_is_guarded_against_double_execution(
@@ -557,6 +880,7 @@ async def test_chat_cancellation_releases_recorded_checkout_stock(db_pool: async
 
     assert result["new_status"] == "cancelled"
     assert result["inventory_released_units"] == 2
+    assert not {"refund_amount", "refund_status", "refund_mode", "message"} & result.keys()
     stock = await db_pool.fetchval(
         "SELECT quantity FROM warehouse_inventory WHERE warehouse_id = $1 AND product_id = $2",
         warehouse_id,

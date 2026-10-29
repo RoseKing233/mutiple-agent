@@ -21,9 +21,12 @@ ORDER_SCHEMA_CONTEXT = """
 - **order_items**: order_id (FK→orders), product_id (FK→products), quantity, unit_price, subtotal
 - **order_status_history**: order_id (FK→orders), status, notes, location, timestamp — full tracking timeline
 - **returns**: order_id (FK→orders), user_id (FK→users), reason, status, return_label_url, refund_method, refund_amount, created_at, resolved_at
-  - Return statuses: requested → approved → shipped_back → received → refunded (or denied)
+  - Return statuses: approved → shipped_back → received → refunded (legacy requested returns may be denied)
+  - The preferred refund method and order total are recorded with the return request
   - Refund methods: original_payment, store_credit
-  - Return window: 30 days from delivery
+  - Return request window: 30 days from delivery
+  - Eligible returns are approved automatically; refunds require a received return and admin approval
+  - No refund-only request or separate refund time limit exists; return requests must be submitted within 30 days of delivery
 """
 
 PRODUCT_SCHEMA_CONTEXT = """

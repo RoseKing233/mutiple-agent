@@ -119,7 +119,7 @@ class CancelOrderRequest(BaseModel):
 
 class ReturnOrderRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=255)
-    refund_method: str = "original_payment"
+    refund_method: Literal["original_payment", "store_credit"] = "original_payment"
 
     @field_validator("reason")
     @classmethod
@@ -128,14 +128,6 @@ class ReturnOrderRequest(BaseModel):
         if not value:
             raise ValueError("reason must not be blank")
         return value
-
-    @field_validator("refund_method")
-    @classmethod
-    def _valid_refund_method(cls, value: str) -> str:
-        if value not in {"original_payment", "store_credit"}:
-            raise ValueError("refund_method must be 'original_payment' or 'store_credit'")
-        return value
-
 
 class ReturnStatusRequest(BaseModel):
     status: Literal["approved", "denied", "received", "refunded"]
@@ -918,9 +910,10 @@ async def approve_hitl_request(
         )
         raise
 
+    execution_succeeded = result.get("success") is True
     updated = await resolve_hitl_request(
         request_id=request_id,
-        decision="approved",
+        decision="approved" if execution_succeeded else "denied",
         admin_email=admin_email,
         note=body.note,
         execution_result=result,
@@ -933,9 +926,12 @@ async def approve_hitl_request(
         request_id,
         req["tool_name"],
         admin_email,
-        result.get("success"),
+        execution_succeeded,
     )
-    return {"status": "approved", "execution_result": result}
+    return {
+        "status": "approved" if execution_succeeded else "rejected",
+        "execution_result": result,
+    }
 
 
 @router.post("/api/admin/hitl/requests/{request_id}/deny")
@@ -1487,6 +1483,19 @@ async def get_order(order_id: str, user: dict = Depends(require_auth)):
         "SELECT id, reason, status, refund_method, refund_amount, return_label_url, created_at, resolved_at FROM returns WHERE order_id = $1",
         order_id,
     )
+    refund_approval_status = None
+    if ret:
+        refund_approval_status = await pool.fetchval(
+            """SELECT status
+               FROM tool_approval_requests
+               WHERE user_email = $1
+                 AND tool_name = 'process_refund'
+                 AND tool_input->>'return_id' = $2
+               ORDER BY created_at DESC
+               LIMIT 1""",
+            email,
+            str(ret["id"]),
+        )
     delivered_event = next((entry for entry in reversed(history) if entry["status"] == "delivered"), None)
     if ret:
         return_eligibility = {
@@ -1561,6 +1570,7 @@ async def get_order(order_id: str, user: dict = Depends(require_auth)):
             "status": ret["status"],
             "refund_method": ret["refund_method"],
             "refund_amount": float(ret["refund_amount"]) if ret["refund_amount"] else None,
+            "refund_approval_status": refund_approval_status,
             "return_label_url": ret["return_label_url"],
             "created_at": ret["created_at"].isoformat(),
             "resolved_at": ret["resolved_at"].isoformat() if ret["resolved_at"] else None,
@@ -1679,16 +1689,19 @@ async def return_order(order_id: str, body: ReturnOrderRequest, user: dict = Dep
                     ),
                 )
 
+            label_token = uuid.uuid4().hex[:12]
+            label_url = f"/api/returns/{label_token}/label"
             ret = await conn.fetchrow(
                 """INSERT INTO returns
                    (order_id, user_id, reason, status, return_label_url, refund_method, refund_amount)
-                   VALUES ($1, $2, $3, 'requested', NULL, $4, $5)
+                   VALUES ($1, $2, $3, 'approved', $4, $5, $6)
                    RETURNING id""",
                 order_id,
                 str(order["user_id"]),
                 body.reason,
+                label_url,
                 body.refund_method,
-                float(order["total"]),
+                order["total"],
             )
             await conn.execute(
                 "UPDATE orders SET status = 'returned' WHERE id = $1",
@@ -1696,19 +1709,22 @@ async def return_order(order_id: str, body: ReturnOrderRequest, user: dict = Dep
             )
             await conn.execute(
                 """INSERT INTO order_status_history (order_id, status, notes)
-                   VALUES ($1, 'returned', $2)""",
+                   VALUES ($1, 'approved', $2)""",
                 order_id,
-                body.reason,
+                f"Return initiated and approved: {body.reason}",
             )
 
     return {
         "return_id": str(ret["id"]),
         "order_id": str(order["id"]),
-        "status": "requested",
-        "return_label_url": None,
-        "refund_amount": float(order["total"]),
+        "status": "approved",
+        "return_label_url": label_url,
         "refund_method": body.refund_method,
-        "message": "Return request submitted for review. A label will be available after approval.",
+        "message": (
+            "Eligible return approved automatically and demo label generated. "
+            "After the item is received, the system will submit a refund for admin approval. "
+            "No refund has been processed yet."
+        ),
     }
 
 
@@ -1744,7 +1760,7 @@ async def mark_return_shipped(order_id: str, user: dict = Depends(require_auth))
                 )
             await conn.execute(
                 """INSERT INTO order_status_history (order_id, status, notes)
-                   VALUES ($1, 'returned', 'Customer marked the approved return as shipped')""",
+                   VALUES ($1, 'shipped_back', 'Customer marked the return as shipped')""",
                 order_id,
             )
     return {"order_id": order_id, "return_id": str(ret["id"]), "status": "shipped_back"}
@@ -1783,21 +1799,31 @@ async def list_admin_returns():
 
 @router.post("/api/admin/returns/{return_id}/status", dependencies=[Depends(require_admin)])
 async def update_admin_return_status(return_id: str, body: ReturnStatusRequest):
-    """Apply a valid return transition; refund completion is a demo-only state change."""
+    """Apply a return transition; simulated receipt automatically queues a refund approval."""
+    if body.status == "refunded":
+        raise HTTPException(
+            status_code=409,
+            detail="Receipt automatically queues the refund; completion requires approval from Admin Approvals.",
+        )
     pool = get_pool()
+    approval_id = None
     async with pool.acquire() as conn:
         async with conn.transaction():
-            order_id = await conn.fetchval(
-                """SELECT o.id FROM orders o
+            order = await conn.fetchrow(
+                """SELECT o.id, o.total FROM orders o
                    JOIN returns r ON r.order_id = o.id
                    WHERE r.id = $1
                    FOR UPDATE OF o""",
                 return_id,
             )
-            if not order_id:
+            if not order:
                 raise HTTPException(status_code=404, detail="Return not found")
             ret = await conn.fetchrow(
-                "SELECT id, status FROM returns WHERE id = $1 FOR UPDATE",
+                """SELECT r.id, r.status, r.refund_method, r.refund_amount, u.email
+                   FROM returns r
+                   JOIN users u ON u.id = r.user_id
+                   WHERE r.id = $1
+                   FOR UPDATE OF r""",
                 return_id,
             )
             if not can_transition_return(ret["status"], body.status):
@@ -1817,42 +1843,86 @@ async def update_admin_return_status(return_id: str, body: ReturnStatusRequest):
                     label_url,
                 )
             else:
-                resolved = body.status in {"denied", "refunded"}
+                resolved = body.status == "denied"
                 await conn.execute(
-                    """UPDATE returns SET status = $2,
+                    """UPDATE returns SET status = $2::varchar,
                               resolved_at = CASE WHEN $3 THEN NOW() ELSE resolved_at END,
-                              return_label_url = CASE WHEN $4 THEN NULL ELSE return_label_url END
+                              return_label_url = CASE WHEN $4 THEN NULL ELSE return_label_url END,
+                              refund_method = CASE WHEN $2::varchar = 'received'
+                                                   THEN COALESCE(refund_method, 'original_payment')
+                                                   ELSE refund_method END,
+                              refund_amount = CASE WHEN $2::varchar = 'received'
+                                                   THEN COALESCE(refund_amount, $5)
+                                                   ELSE refund_amount END
                        WHERE id = $1""",
                     return_id,
                     body.status,
                     resolved,
                     body.status == "denied",
+                    order["total"],
                 )
 
             if body.status == "denied":
-                await conn.execute("UPDATE orders SET status = 'delivered' WHERE id = $1", order_id)
+                await conn.execute("UPDATE orders SET status = 'delivered' WHERE id = $1", order["id"])
                 await conn.execute(
                     """INSERT INTO order_status_history (order_id, status, notes)
                        VALUES ($1, 'delivered', 'Return request denied by admin')""",
-                    order_id,
+                    order["id"],
+                )
+                await conn.execute(
+                    """INSERT INTO order_status_history (order_id, status, notes)
+                       VALUES ($1, 'denied', 'Return request denied by admin')""",
+                    order["id"],
                 )
             else:
                 await conn.execute(
                     """INSERT INTO order_status_history (order_id, status, notes)
-                       VALUES ($1, 'returned', $2)""",
-                    order_id,
+                       VALUES ($1, $2, $3)""",
+                    order["id"],
+                    body.status,
                     f"Return status changed to {body.status} by admin",
                 )
+            if body.status == "received":
+                refund_method = ret["refund_method"] or "original_payment"
+                approval_input = {
+                    "return_id": str(ret["id"]),
+                    "refund_method": refund_method,
+                    "review_reason": "Returned item received; refund is awaiting admin approval.",
+                }
+                approval_id = await conn.fetchval(
+                    """SELECT id
+                       FROM tool_approval_requests
+                       WHERE user_email = $1
+                         AND tool_name = 'process_refund'
+                         AND status IN ('pending', 'processing')
+                         AND tool_input->>'return_id' = $2
+                       ORDER BY created_at DESC
+                       LIMIT 1""",
+                    ret["email"],
+                    str(ret["id"]),
+                )
+                if approval_id is None:
+                    approval_id = await conn.fetchval(
+                        """INSERT INTO tool_approval_requests
+                               (user_email, session_id, agent_name, tool_name, tool_input)
+                           VALUES ($1, NULL, 'order-management', 'process_refund', $2::jsonb)
+                           RETURNING id""",
+                        ret["email"],
+                        json.dumps(approval_input),
+                    )
 
     return {
         "return_id": return_id,
-        "order_id": str(order_id),
+        "order_id": str(order["id"]),
         "status": body.status,
         "return_label_url": label_url,
-        "refund_mode": "simulated" if body.status == "refunded" else None,
+        "refund_approval_id": str(approval_id) if approval_id else None,
         "message": (
-            "Demo refund marked complete. No payment provider is connected, so no money was transferred."
-            if body.status == "refunded"
+            "Receipt confirmed. A refund request was automatically added to Admin Approvals; "
+            "no refund has been processed yet."
+            if body.status == "received"
+            else "Eligible return approved and a demo label is ready."
+            if body.status == "approved"
             else f"Return status updated to {body.status}."
         ),
     }
@@ -2033,7 +2103,7 @@ def _build_return_label_pdf(
         "BT /F1 10 Tf 40 332 Td (5. Your refund will be processed after we receive and inspect the items.) Tj ET",
         # --- Footer ---
         "0.6 0.6 0.6 rg",
-        "BT /F1 8 Tf 30 50 Td (Generated by E-Commerce Agents | This label is valid for 30 days from the return request date.) Tj ET",
+        "BT /F1 8 Tf 30 50 Td (Demo only - no carrier service or postage is connected.) Tj ET",
         f"BT /F1 8 Tf 30 38 Td (Label ID: {pdf_str(barcode)} | For support, contact support@ecommerce-agents.com) Tj ET",
     ]
 
