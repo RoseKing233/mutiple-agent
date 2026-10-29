@@ -51,6 +51,7 @@ This folder contains the full technical documentation for E-Commerce Agents.
 | [architecture.md](architecture.md) | System overview, agent architecture, A2A protocol, auth flow, data flow, technology decisions |
 | [adding-an-agent.md](adding-an-agent.md) | Step-by-step checklist to add a new specialist agent |
 | [api-reference.md](api-reference.md) | All 20 REST endpoints (auth, chat, products, orders, admin, marketplace) |
+| [order-support.md](order-support.md) | 智能客服订单支持：取消、退货、退款流程、API 和验证记录 |
 | [agent-flows.md](agent-flows.md) | Five multi-agent collaboration sequence diagrams with pattern notes |
 | [database-schema.md](database-schema.md) | 34 tables in 12 logical groups, ER diagram, indexing, gotchas |
 | [deployment.md](deployment.md) | Docker Compose profiles, `dev.sh` script, environment variables, local dev, health checks |

@@ -1821,11 +1821,12 @@ async def update_admin_return_status(return_id: str, body: ReturnStatusRequest):
                 await conn.execute(
                     """UPDATE returns SET status = $2,
                               resolved_at = CASE WHEN $3 THEN NOW() ELSE resolved_at END,
-                              return_label_url = CASE WHEN $2 = 'denied' THEN NULL ELSE return_label_url END
+                              return_label_url = CASE WHEN $4 THEN NULL ELSE return_label_url END
                        WHERE id = $1""",
                     return_id,
                     body.status,
                     resolved,
+                    body.status == "denied",
                 )
 
             if body.status == "denied":
