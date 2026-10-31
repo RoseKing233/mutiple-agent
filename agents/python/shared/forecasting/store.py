@@ -17,7 +17,7 @@ def decode(value: Any) -> Any:
 
 async def save_report(pool: asyncpg.Pool, email: str, spec: ForecastRequest, request_id: uuid.UUID) -> dict:
     async with pool.acquire() as conn:
-        owner = await conn.fetchval("SELECT id FROM users WHERE email=$1 AND role IN ('store_manager','admin')", email)
+        owner = await conn.fetchval("SELECT id FROM users WHERE email=$1 AND role = 'store_manager'", email)
         if owner is None:
             raise PermissionError("Store manager account required")
         # Session lock before establishing the repeatable-read snapshot: a retry

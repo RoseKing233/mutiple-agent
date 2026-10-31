@@ -1,5 +1,7 @@
 # 上架 AI 营销辅助：交接文档
 
+> 当前分支已统一为顾客、店铺经理、管理员三种业务身份；经理接管原商家职责并管理全店。经营接口仅限经理；管理员不继承经营和购物权限。迁移已到 007，后续从 008 开始。见[单店角色说明](../single-store-management.md)。以下保留原交接阶段记录，角色和迁移编号以新说明为准。
+
 - 负责人：Xinyu Gu（2026-10-27）
 - 分支：`feature/marketing-assist`，基于 `feature/inventory-management`（`a4c8a12`），两个都没有 push
 - 同目录：`plan.md`、`dev-log.md`、`test-record.md`
@@ -53,8 +55,8 @@
 
 | 方法 | 路径 | 权限 | 请求 → 返回 |
 |---|---|---|---|
-| POST | `/api/manager/marketing/copy` | store_manager / admin | `{name, category, brand?, price?, description?, keywords[], audience?, tone}` → `{generation_id, variants: [{angle, title, description, highlights}]}`；失败返回 503 |
-| POST | `/api/manager/marketing/images` | store_manager / admin | `{name, category, description?, style, background?}` → `{generation_id, prompt, images: [{id, url}]}`；失败返回 503 |
+| POST | `/api/manager/marketing/copy` | store_manager | `{name, category, brand?, price?, description?, keywords[], audience?, tone}` → `{generation_id, variants: [{angle, title, description, highlights}]}`；失败返回 503 |
+| POST | `/api/manager/marketing/images` | store_manager | `{name, category, description?, style, background?}` → `{generation_id, prompt, images: [{id, url}]}`；失败返回 503 |
 | GET | `/api/media/{id}` | 公开 | 返回 `image/webp`，不存在时返回 404 |
 
 配置（可选的环境变量）：

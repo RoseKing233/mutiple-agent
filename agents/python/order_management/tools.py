@@ -21,6 +21,7 @@ from shared.tool_inputs import (
 
 
 @tool(name="get_user_orders", description="List orders for the current user, optionally filtered by status.")
+@requires_role("customer")
 async def get_user_orders(
     status: Annotated[str | None, Field(description="Filter by order status: placed, confirmed, shipped, out_for_delivery, delivered, cancelled, returned")] = None,
     limit: Annotated[int, Field(description="Max number of orders to return")] = 10,
@@ -74,6 +75,7 @@ async def get_user_orders(
 
 
 @tool(name="get_order_details", description="Get full order details including line items, status history, and tracking info.")
+@requires_role("customer")
 async def get_order_details(
     order_id: Annotated[str, Field(description="UUID of the order")],
 ) -> dict:
@@ -154,6 +156,7 @@ async def get_order_details(
 
 
 @tool(name="get_order_tracking", description="Get latest tracking status and location for an order.")
+@requires_role("customer")
 async def get_order_tracking(
     order_id: Annotated[str, Field(description="UUID of the order")],
 ) -> dict:
@@ -227,7 +230,7 @@ async def get_order_tracking(
     name="cancel_order",
     description="Cancel an owned order only when its status is 'placed' or 'confirmed'.",
 )
-@requires_role("customer", "seller", "admin")
+@requires_role("customer")
 async def cancel_order(
     order_id: Annotated[str, Field(description="UUID of the order to cancel")],
     reason: Annotated[str, Field(description="Reason for cancellation")],
@@ -296,7 +299,7 @@ async def cancel_order(
     description="Modify the shipping address of an order. Only orders that haven't shipped yet can be modified.",
     approval_mode="always_require",
 )
-@requires_role("customer", "seller", "admin")
+@requires_role("customer")
 async def modify_order(
     order_id: Annotated[str, Field(description="UUID of the order to modify")],
     new_address: Annotated[dict, Field(description="New shipping address with keys: street, city, state, zip, country")],

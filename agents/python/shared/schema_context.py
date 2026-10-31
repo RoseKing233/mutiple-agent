@@ -8,7 +8,7 @@ interpret results.
 USER_SCHEMA_CONTEXT = """
 ## Database: Users
 - **users**: id (UUID), email, name, role, loyalty_tier, total_spend, created_at, is_active
-  - Roles: customer, power_user, seller, admin
+  - Roles: customer, store_manager, admin
   - Loyalty tiers: bronze (default), silver (spend >= $1000, 5% discount), gold (spend >= $3000, 10% discount + free shipping + priority support)
   - The current user's email is available — always use it to scope queries
 """

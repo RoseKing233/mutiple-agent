@@ -21,7 +21,7 @@ router = APIRouter(prefix="/api/manager", tags=["manager"])
 
 
 async def require_manager(user: dict[str, Any] = Depends(require_auth)) -> dict[str, Any]:
-    if user.get("role") not in {"store_manager", "admin"}:
+    if user.get("role") != "store_manager":
         raise HTTPException(403, "Store manager access required")
     return user
 

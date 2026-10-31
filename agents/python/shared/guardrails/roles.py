@@ -8,8 +8,9 @@ then MAF's approval gate runs (confirm).
 
 Identity is read from the ``current_user_role`` ContextVar (set by the auth
 middleware / route deps) — never passed as a function argument, per repo
-convention. ``admin`` is always allowed (superuser). Gated by
-``GUARDRAILS_ENABLED`` so it can be disabled without a redeploy.
+convention. Roles are explicit: admin does not inherit customer or manager
+permissions. Authorization is always enforced, independently of optional
+GUARDRAILS_ENABLED content-safety controls.
 
 Two forms are provided:
 
@@ -26,12 +27,9 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
-from shared.config import settings
 from shared.context import current_user_role
 
 logger = logging.getLogger(__name__)
-
-_ALWAYS_ALLOWED = {"admin"}
 
 F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
 
@@ -58,13 +56,11 @@ def ensure_role(*roles: str, tool: str = "tool") -> dict[str, Any] | None:
 
     Use as a guard clause at the top of a tool body::
 
-        denied = ensure_role("seller", "admin", tool="get_my_products")
+        denied = ensure_role("store_manager", tool="get_store_products")
         if denied:
             return denied
     """
-    if not settings.GUARDRAILS_ENABLED:
-        return None
-    allowed = {r.lower() for r in roles} | _ALWAYS_ALLOWED
+    allowed = {r.lower() for r in roles}
     role = (current_user_role.get() or "").lower()
     if role in allowed:
         return None
@@ -79,18 +75,17 @@ def requires_role(*roles: str) -> Callable[[F], F]:
     ``__annotations__``)::
 
         @tool(name="get_my_products", description="...")
-        @requires_role("seller", "admin")
+        @requires_role("store_manager")
         async def get_my_products(...): ...
     """
-    allowed = {r.lower() for r in roles} | _ALWAYS_ALLOWED
+    allowed = {r.lower() for r in roles}
 
     def decorator(fn: F) -> F:
         @functools.wraps(fn)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            if settings.GUARDRAILS_ENABLED:
-                role = (current_user_role.get() or "").lower()
-                if role not in allowed:
-                    return _denial(allowed, getattr(fn, "__name__", "tool"), role)
+            role = (current_user_role.get() or "").lower()
+            if role not in allowed:
+                return _denial(allowed, getattr(fn, "__name__", "tool"), role)
             return await fn(*args, **kwargs)
 
         return wrapper  # type: ignore[return-value]

@@ -148,14 +148,9 @@ async def test_demo_import_is_additive_repeatable_and_dry_run_safe(catalogue: An
         await module.seed_content(conn, apply=True)
         await module.seed_content(conn, apply=True)
         versions = await conn.fetch("SELECT version FROM schema_migrations ORDER BY version")
-        assert [row["version"] for row in versions] == [
-            "001_sales_inventory_history.sql",
-            "002_manager_analysis.sql",
-            "003_analysis_runs.sql",
-            "004_inventory_management.sql",
-            "005_marketing_assist.sql",
-            "006_recommendation_evidence.sql",
-        ]
+        assert [row["version"] for row in versions] == sorted(
+            path.name for path in (ROOT / "docker/postgres/migrations").glob("[0-9]*.sql")
+        )
         assert await conn.fetchval("SELECT COUNT(*) FROM reviews") == before + 2
         assert await conn.fetchval("SELECT COUNT(*) FROM product_documents") == 3
         assert await conn.fetchval("SELECT is_synthetic FROM reviews WHERE id = $1", uuid.UUID(original)) is False

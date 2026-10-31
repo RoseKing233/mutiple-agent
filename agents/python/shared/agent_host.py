@@ -52,16 +52,14 @@ def _history_as_maf_messages(history: list[dict] | None, user_message: str) -> l
 
 
 def _run_options(user_message: str = "", agent_name: str = "") -> dict[str, Any]:
-    """Per-run chat options applied to every agent. Pins the sampling
-    temperature so the same query yields consistent answers (the provider
-    default of ~1.0 makes identical prompts diverge — see LLM_TEMPERATURE).
-    """
+    """Use compatible sampling options and preserve the native first-tool policy."""
     from shared.config import settings
     from shared.context import current_user_role
     from shared.forecasting.chat_policy import required_report_tool
+    from shared.llm_options import sampling_options
     from shared.order_management.chat_policy import required_order_tool
 
-    options: dict[str, Any] = {"temperature": settings.LLM_TEMPERATURE}
+    options: dict[str, Any] = dict(sampling_options(settings.LLM_TEMPERATURE))
     role = current_user_role.get()
     required = required_order_tool(user_message, agent_name, role) or required_report_tool(
         user_message, agent_name, role

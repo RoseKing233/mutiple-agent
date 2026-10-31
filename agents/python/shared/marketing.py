@@ -23,6 +23,7 @@ import asyncpg
 from pydantic import BaseModel, ConfigDict, Field
 
 from shared.inventory_management import manager_id
+from shared.llm_options import sampling_options
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +155,7 @@ async def openai_copy_writer(messages: list[dict[str, str]]) -> str:
     response = await client.chat.completions.create(
         model=model,
         messages=messages,
-        temperature=0.8,
+        **sampling_options(0.8, model=model),
         timeout=60,
         response_format={
             "type": "json_schema",

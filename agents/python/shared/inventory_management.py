@@ -106,7 +106,7 @@ def _notes(reason: str, actor_email: str) -> str:
 
 async def manager_id(conn: asyncpg.Connection, email: str) -> uuid.UUID:
     owner = await conn.fetchval(
-        "SELECT id FROM users WHERE email=$1 AND role IN ('store_manager','admin') AND is_active", email
+        "SELECT id FROM users WHERE email=$1 AND role = 'store_manager' AND is_active", email
     )
     if owner is None:
         raise PermissionError("Store manager account required")

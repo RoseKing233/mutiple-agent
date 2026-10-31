@@ -1,5 +1,7 @@
 # 库存建议与库存管理：交接文档
 
+> 当前分支已统一为顾客、店铺经理、管理员三种业务身份；经理接管原商家职责并管理全店。经营接口仅限经理；管理员不继承经营和购物权限。迁移已到 007，后续从 008 开始。见[单店角色说明](../single-store-management.md)。以下保留原交接阶段记录，角色和迁移编号以新说明为准。
+
 - 负责人：Xinyu Gu（接力开发第 2 天，2026-10-27）
 - 分支：`feature/inventory-management`，基于 Jingtong 的 `feature/sales-analysis-forecast`，两个都还没合并到 main
 - 同目录其他文档：`plan.md`（计划和设计取舍）、`dev-log.md`（开发过程和决策）、`test-record.md`（测试结果）
@@ -76,7 +78,7 @@
 | `web/src/app/(app)/inventory/page.tsx`、`web/src/components/manager/inventory.tsx` | 简易页面 |
 | `web/src/lib/api.ts`（`api.inventory`）、`web/src/lib/nav.ts` | 通用请求方法、侧边栏入口 |
 
-## 5. 接口（都在 `/api/manager` 下，只允许 store_manager / admin，未登录 401，无权限 403）
+## 5. 接口（都在 `/api/manager` 下，只允许 store_manager，未登录 401，无权限 403）
 
 | 方法 | 路径 | 说明 |
 |---|---|---|

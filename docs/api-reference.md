@@ -621,7 +621,7 @@ List all active agents in the marketplace catalog.
     "version": "1.0",
     "capabilities": ["search", "recommend", "compare"],
     "requires_approval": true,
-    "allowed_roles": ["power_user", "admin"]
+    "allowed_roles": ["customer", "store_manager", "admin"]
   }
 ]
 ```
@@ -641,7 +641,7 @@ Submit an access request for a specific agent.
 ```json
 {
   "agent_name": "product-discovery",
-  "role_requested": "power_user",
+  "role_requested": "user",
   "use_case": "I need advanced product search capabilities for comparison shopping."
 }
 ```
@@ -693,7 +693,7 @@ List agents the authenticated user has been granted access to.
     "description": "Searches products by keyword, category, price range, and semantic similarity.",
     "category": "Shopping",
     "icon": "search",
-    "role": "power_user",
+    "role": "user",
     "granted_at": "2026-03-01T12:00:00+00:00"
   }
 ]
@@ -720,7 +720,7 @@ List all pending access requests across all users.
   {
     "id": "req-uuid-1",
     "agent_name": "product-discovery",
-    "role_requested": "power_user",
+    "role_requested": "user",
     "use_case": "I need advanced product search capabilities.",
     "status": "pending",
     "created_at": "2026-04-01T08:00:00+00:00",
@@ -937,3 +937,24 @@ All error responses follow FastAPI's standard format:
 - [`docs/deployment.md`](deployment.md) — running the stack so endpoints are reachable
 - [`docs/frontend.md`](frontend.md) — how the Next.js client calls these endpoints
 - [Project README](../README.md)
+
+
+## Single-store manager operations (course branch)
+
+The business roles are customer, store_manager and admin. Managers replace sellers and operate all products; legacy seller_id values do not restrict access. See [the current role, migration and API contract](single-store-management.md).
+
+- `GET /api/manager/store/products`: all products, including inactive/unowned products; category/limit/offset.
+- `GET /api/manager/orders`: all orders; status/limit/offset.
+- `GET /api/manager/store/stats`: product_count, order_count, item_sales_amount, avg_rating and sales_definition.
+- Existing `/api/manager/products`, `/api/manager/inventory` and `/api/manager/warehouses` supply store-wide writes.
+
+These operations require store_manager only. Personal shopping requires customer; refund approval requires admin. Item sales amount excludes cancelled orders, includes returned orders and is not net revenue. Legacy `/api/seller/*` reads are deprecated manager-only aliases.
+
+
+### Current single-store role boundaries (2026-10-31)
+
+`/api/manager/*` and deprecated `/api/seller/*` require `store_manager` only.
+Shopping (`/api/cart*`, `/api/checkout`, `/api/orders*`) requires `customer`, with existing ownership checks.
+`/api/admin/*` remains admin-only. Admin does not inherit manager/customer permissions.
+Tool authorization uses the same explicit role boundaries even when content guardrails are disabled.
+See [single-store contract](single-store-management.md) for preserved data and local demo accounts.

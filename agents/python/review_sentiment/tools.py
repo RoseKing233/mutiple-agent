@@ -448,8 +448,11 @@ async def search_reviews(
         }
 
 
-@tool(name="draft_seller_response", description="Generate a professional response template for a negative review. Returns a template the seller can customize.")
-@requires_role("seller", "admin")
+@tool(
+    name="draft_seller_response",
+    description="Generate a review response template for the store manager to customize. Does not publish a reply.",
+)
+@requires_role("store_manager")
 async def draft_seller_response(
     review_id: Annotated[str, Field(description="UUID of the review to respond to")],
 ) -> dict:
@@ -481,7 +484,7 @@ async def draft_seller_response(
                 f"Could you please reach out to our customer support team so we can investigate "
                 f"your concern and find a suitable resolution?\n\n"
                 f"We appreciate your patience and look forward to resolving this for you.\n\n"
-                f"Best regards,\n[Your Name]\nSeller Support Team"
+                f"Best regards,\n[Your Name]\nStore Support Team"
             )
         elif rating == 3:
             template = (
@@ -492,7 +495,7 @@ async def draft_seller_response(
                 f"If there is anything specific we can do to improve your experience, "
                 f"please do not hesitate to contact our support team.\n\n"
                 f"Thank you for choosing our platform.\n\n"
-                f"Best regards,\n[Your Name]\nSeller Support Team"
+                f"Best regards,\n[Your Name]\nStore Support Team"
             )
         else:
             template = (
@@ -500,7 +503,7 @@ async def draft_seller_response(
                 f"Thank you for your review of the {product_name}! "
                 f"We are glad to hear about your experience.\n\n"
                 f"If there is anything else we can help with, please let us know.\n\n"
-                f"Best regards,\n[Your Name]\nSeller Support Team"
+                f"Best regards,\n[Your Name]\nStore Support Team"
             )
 
         return {

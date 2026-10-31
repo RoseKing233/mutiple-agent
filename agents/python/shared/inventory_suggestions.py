@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from shared.forecasting.config import ForecastRequest
 from shared.forecasting.service import forecast_report
 from shared.inventory_ledger import change_inventory
+from shared.llm_options import sampling_options
 from shared.sales_analysis import serialize
 
 logger = logging.getLogger(__name__)
@@ -341,7 +342,7 @@ async def openai_rationale_writer(messages: list[dict[str, str]]) -> str:
     response = await client.chat.completions.create(
         model=model,
         messages=messages,
-        temperature=0.2,
+        **sampling_options(0.2, model=model),
         timeout=30,
         response_format={
             "type": "json_schema",

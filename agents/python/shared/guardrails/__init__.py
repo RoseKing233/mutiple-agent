@@ -12,8 +12,9 @@ Defense-in-depth on top of the prompt-layer rules in
 - :func:`shared.guardrails.roles.requires_role` — tool-level authorization that
   runs in front of the existing ``approval_mode`` human-approval gates.
 
-Everything is flag-gated via ``shared.config.settings`` (``GUARDRAILS_*``) and
-defaults to fail-open so it can be rolled out observe-only first.
+Content-safety checks are flag-gated via ``shared.config.settings`` (``GUARDRAILS_*``) and
+default to fail-open so they can be rolled out observe-only first. Role
+authorization is always enforced and is not controlled by those flags.
 """
 
 from __future__ import annotations

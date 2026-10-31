@@ -16,7 +16,7 @@ from shared.context import current_user_role
 from shared.guardrails.roles import ensure_role, requires_role
 
 
-@requires_role("seller", "admin")
+@requires_role("store_manager")
 async def _sample(x: int) -> dict:
     return {"ok": x}
 
@@ -27,20 +27,20 @@ def _enable(monkeypatch):
 
 
 async def test_allows_listed_role() -> None:
-    current_user_role.set("seller")
+    current_user_role.set("store_manager")
     assert await _sample(1) == {"ok": 1}
 
 
-async def test_admin_always_allowed() -> None:
+async def test_admin_has_no_implicit_manager_permission() -> None:
     current_user_role.set("admin")
-    assert await _sample(2) == {"ok": 2}
+    assert (await _sample(2))["error"] == "permission_denied"
 
 
 async def test_denies_customer() -> None:
     current_user_role.set("customer")
     out = await _sample(3)
     assert out["error"] == "permission_denied"
-    assert "seller" in out["required_roles"]
+    assert "store_manager" in out["required_roles"]
 
 
 async def test_denies_missing_role() -> None:
@@ -49,10 +49,10 @@ async def test_denies_missing_role() -> None:
     assert out["error"] == "permission_denied"
 
 
-async def test_disabled_bypasses(monkeypatch) -> None:
+async def test_disabled_content_guardrails_still_enforces_roles(monkeypatch) -> None:
     monkeypatch.setattr(settings, "GUARDRAILS_ENABLED", False)
     current_user_role.set("customer")
-    assert await _sample(5) == {"ok": 5}
+    assert (await _sample(5))["error"] == "permission_denied"
 
 
 def test_decorator_preserves_signature() -> None:
@@ -63,7 +63,7 @@ def test_decorator_preserves_signature() -> None:
 
 def test_composes_under_tool_decorator() -> None:
     @tool(name="sample_tool", description="A sample tool.")
-    @requires_role("seller", "admin")
+    @requires_role("store_manager")
     async def sample_tool(
         x: int,
     ) -> dict:
@@ -80,17 +80,17 @@ def test_composes_under_tool_decorator() -> None:
 
 
 async def test_ensure_role_allows() -> None:
-    current_user_role.set("seller")
-    assert ensure_role("seller", "admin", tool="t") is None
+    current_user_role.set("store_manager")
+    assert ensure_role("store_manager", tool="t") is None
 
 
 async def test_ensure_role_denies() -> None:
     current_user_role.set("customer")
-    denied = ensure_role("seller", "admin", tool="t")
+    denied = ensure_role("store_manager", tool="t")
     assert denied and denied["error"] == "permission_denied"
 
 
 async def test_ensure_role_disabled(monkeypatch) -> None:
     monkeypatch.setattr(settings, "GUARDRAILS_ENABLED", False)
     current_user_role.set("customer")
-    assert ensure_role("seller", "admin", tool="t") is None
+    assert ensure_role("store_manager", tool="t")["error"] == "permission_denied"

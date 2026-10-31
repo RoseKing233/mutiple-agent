@@ -20,6 +20,10 @@ client `web/src/lib/api.ts`.
 </tr>
 </table>
 
+## Current course branch
+
+Single-store roles: customer, store_manager and admin. Shopping is customer-only; operational pages are manager-only; admin uses platform monitoring and approval pages without inheriting shopping or management permissions. Managers use `/management`, `/analysis`, `/inventory` and the management view of `/products`. Legacy seller pages redirect to the manager pages. See [current role and API contract](single-store-management.md).
+
 ## Audiences & routing
 
 Two front doors, by audience:

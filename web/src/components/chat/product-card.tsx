@@ -59,7 +59,7 @@ const UUID_RE =
 
 export function ChatProductCard({ data, onAction }: ChatProductCardProps) {
   const { cart, addItem } = useCart();
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const router = useRouter();
   const [optimisticAdded, setOptimisticAdded] = useState(false);
   const [error, setError] = useState(false);
@@ -187,7 +187,7 @@ export function ChatProductCard({ data, onAction }: ChatProductCardProps) {
               Sign in to buy
             </Button>
           )}
-          {productId && isAuthenticated && (
+          {productId && isAuthenticated && user?.role === "customer" && (
             <Button
               size="sm"
               className={`h-7 text-xs ${

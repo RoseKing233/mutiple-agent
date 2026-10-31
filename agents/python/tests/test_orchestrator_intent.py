@@ -71,7 +71,7 @@ async def test_user_identity_forwarded_in_headers(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(orch_mod, "AGENT_REGISTRY", {"order-management": "http://om:8082"})
     monkeypatch.setattr(settings, "AGENT_SHARED_SECRET", "test-secret", raising=False)
     current_user_email.set("bob@example.com")
-    current_user_role.set("seller")
+    current_user_role.set("store_manager")
     current_session_id.set("")
 
     mock_class, captured = _capture_client()
@@ -79,7 +79,7 @@ async def test_user_identity_forwarded_in_headers(monkeypatch: pytest.MonkeyPatc
         await call_specialist_agent(agent_name="order-management", message="list my orders")
 
     assert captured["headers"]["x-user-email"] == "bob@example.com"
-    assert captured["headers"]["x-user-role"] == "seller"
+    assert captured["headers"]["x-user-role"] == "store_manager"
 
 
 @pytest.mark.asyncio

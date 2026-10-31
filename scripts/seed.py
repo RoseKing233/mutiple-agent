@@ -2,7 +2,7 @@
 E-Commerce Agents Database Seeder
 
 Initializes an EMPTY database with synthetic e-commerce data; use --reset to rebuild:
-- 21 users (1 admin, 1 store manager, 2 power_users, 2 sellers, 15 customers)
+- 19 users (1 admin, 1 store manager, 17 customers)
 - 50 products across 5 categories
 - Configurable 180-day coherent sales/inventory history
 - 500 reviews (5% fake)
@@ -71,10 +71,8 @@ def hash_pw(password: str) -> str:
 USERS = [
     # (email, password, name, role, loyalty_tier, total_spend)
     ("admin.demo@gmail.com", "admin123", "Admin User", "admin", "gold", 5000),
-    ("power.demo@gmail.com", "power123", "Power User", "power_user", "gold", 3500),
-    ("power2.demo@gmail.com", "power123", "Sam Power", "power_user", "silver", 1200),
-    ("seller.demo@gmail.com", "seller123", "Acme Store", "seller", "bronze", 0),
-    ("seller2.demo@gmail.com", "seller123", "TechMart", "seller", "bronze", 0),
+    ("power.demo@gmail.com", "power123", "Power User", "customer", "gold", 3500),
+    ("power2.demo@gmail.com", "power123", "Sam Power", "customer", "silver", 1200),
     ("alice.johnson@gmail.com", "customer123", "Alice Johnson", "customer", "gold", 4200),
     ("bob.smith@gmail.com", "customer123", "Bob Smith", "customer", "silver", 1800),
     ("carol.davis@gmail.com", "customer123", "Carol Davis", "customer", "silver", 1500),
@@ -203,7 +201,7 @@ AGENT_CATALOG = [
     ("product-discovery", "Product Discovery", "Natural language product search with personalized recommendations, semantic search, and price tracking.", "Search & Discovery", "search", ["product_search", "semantic_search", "price_comparison", "trending"], False),
     ("order-management", "Order Management", "Order tracking, cancellation, modification, returns, and refund processing.", "Order Operations", "package", ["order_tracking", "cancellation", "returns", "refunds"], False),
     ("pricing-promotions", "Pricing & Promotions", "Coupon validation, cart optimization, loyalty discounts, and deal discovery.", "Pricing", "tag", ["coupon_validation", "cart_optimization", "loyalty_discounts"], True),
-    ("review-sentiment", "Review & Sentiment", "Review analysis, sentiment breakdown, fake review detection, and seller response drafting.", "Analytics", "bar-chart", ["sentiment_analysis", "fake_detection", "review_search"], True),
+    ("review-sentiment", "Review & Sentiment", "Review analysis, sentiment breakdown, fake review detection, and store response drafting.", "Analytics", "bar-chart", ["sentiment_analysis", "fake_detection", "review_search"], True),
     ("inventory-fulfillment", "Inventory & Fulfillment", "Stock checking, shipping estimation, carrier comparison, and fulfillment planning.", "Logistics", "truck", ["stock_check", "shipping_estimate", "carrier_comparison"], False),
     ("customer-support", "Customer Support", "Orchestrator agent that routes requests to specialist agents for comprehensive assistance.", "Support", "headphones", ["multi_agent_routing", "intent_classification", "conversation_management"], False),
 ]
@@ -339,25 +337,21 @@ def product_id_for(name: str) -> uuid.UUID:
 
 
 async def seed_products(conn: asyncpg.Connection, user_ids: dict[str, uuid.UUID]) -> list[dict]:
-    """Insert products and return list with ids. Assigns seller ownership."""
-    seller1_id = user_ids["seller.demo@gmail.com"]
-    seller2_id = user_ids["seller2.demo@gmail.com"]
+    """Insert products and return list with ids. No seller ownership boundary in the single store."""
 
     products_with_ids = []
     for i, p in enumerate(PRODUCTS):
-        # First 25 products -> seller.demo@gmail.com, remaining 25 -> seller2.demo@gmail.com
-        seller_id = seller1_id if i < 25 else seller2_id
         product_id = product_id_for(p["name"])
         row = await conn.fetchrow(
-            """INSERT INTO products (id, name, description, category, brand, price, original_price, image_url, rating, review_count, specs, seller_id)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12)
+            """INSERT INTO products (id, name, description, category, brand, price, original_price, image_url, rating, review_count, specs)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
                ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name
                RETURNING id""",
             product_id, p["name"], p["description"], p["category"], p["brand"],
             Decimal(str(p["price"])), Decimal(str(p.get("original_price", p["price"]))),
             p.get("image_url"),
             Decimal(str(p["rating"])), p["review_count"],
-            json.dumps(p["specs"]), seller_id,
+            json.dumps(p["specs"]),
         )
         if row:
             products_with_ids.append({**p, "id": row["id"]})

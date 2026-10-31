@@ -25,7 +25,7 @@ const CartContext = createContext<CartContextValue | null>(null);
 
 export function CartProvider({ children }: { children: React.ReactNode }) {
   const { isAuthenticated: signedIn, user } = useAuth();
-  const isAuthenticated = signedIn && user?.role !== "store_manager";
+  const isAuthenticated = signedIn && user?.role === "customer";
   const [cart, setCart] = useState<CartResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -54,26 +54,29 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
   const addItem = useCallback(
     async (productId: string, quantity: number = 1) => {
+      if (!isAuthenticated) throw new Error("Customer account required for shopping");
       await api.addToCart(productId, quantity);
       await refreshCart();
     },
-    [refreshCart]
+    [isAuthenticated, refreshCart]
   );
 
   const updateItem = useCallback(
     async (itemId: string, quantity: number) => {
+      if (!isAuthenticated) throw new Error("Customer account required for shopping");
       await api.updateCartItem(itemId, quantity);
       await refreshCart();
     },
-    [refreshCart]
+    [isAuthenticated, refreshCart]
   );
 
   const removeItem = useCallback(
     async (itemId: string) => {
+      if (!isAuthenticated) throw new Error("Customer account required for shopping");
       await api.removeCartItem(itemId);
       await refreshCart();
     },
-    [refreshCart]
+    [isAuthenticated, refreshCart]
   );
 
   const itemCount = cart?.item_count ?? 0;

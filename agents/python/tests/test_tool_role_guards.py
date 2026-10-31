@@ -1,14 +1,14 @@
 """RBAC coverage for the six tools guarded by ``@requires_role`` in this change:
 
-- ``review_sentiment.tools.draft_seller_response`` -> seller/admin
-- ``inventory_fulfillment.tools.calculate_fulfillment_plan`` -> seller/admin
-- ``inventory_fulfillment.tools.place_backorder`` -> seller/admin
-- ``order_management.tools.cancel_order`` -> customer/seller/admin
-- ``order_management.tools.modify_order`` -> customer/seller/admin
-- ``shared.tools.return_tools.process_refund`` -> customer/seller/admin
+- ``review_sentiment.tools.draft_seller_response`` -> store_manager
+- ``inventory_fulfillment.tools.calculate_fulfillment_plan`` -> store_manager
+- ``inventory_fulfillment.tools.place_backorder`` -> customer
+- ``order_management.tools.cancel_order`` -> customer, with ownership check
+- ``order_management.tools.modify_order`` -> customer, with ownership check
+- ``shared.tools.return_tools.process_refund`` -> customer, with ownership check
 
-The generic decorator/guard-clause behavior (admin-always-allowed, signature
-preservation, disabled-bypass) is already exhaustively covered by
+The generic decorator/guard-clause behavior (no implicit admin bypass, signature
+preservation, flag-independent enforcement) is already exhaustively covered by
 ``test_guardrails_roles.py`` against a synthetic tool. This file only proves
 each REAL tool got the decorator wired at the right role set and that a
 denial happens before any DB work (no seed fixtures needed for the denied
@@ -48,61 +48,61 @@ def _enable_guardrails(monkeypatch: pytest.MonkeyPatch) -> None:
     current_user_email.set("")
 
 
-# ─────────────────────── seller/admin-only tools ─────────────────────────────
+# ─────────────────────── store_manager-only tools ─────────────────────────────
 
 
 async def test_draft_seller_response_denied_for_customer() -> None:
     current_user_role.set("customer")
     result = await draft_seller_response(review_id=str(uuid.uuid4()))
     assert result["error"] == "permission_denied"
-    assert "seller" in result["required_roles"]
+    assert "store_manager" in result["required_roles"]
 
 
-async def test_draft_seller_response_allowed_for_seller(db_pool: asyncpg.Pool) -> None:
-    current_user_role.set("seller")
+async def test_draft_seller_response_allowed_for_store_manager(db_pool: asyncpg.Pool) -> None:
+    current_user_role.set("store_manager")
     result = await draft_seller_response(review_id=str(uuid.uuid4()))
     # Guard passed through to real logic (a random id simply isn't found).
     assert result["error"] != "permission_denied"
     assert result["error"].startswith("Review not found")
 
 
-async def test_draft_seller_response_allowed_for_admin(db_pool: asyncpg.Pool) -> None:
+async def test_draft_seller_response_denied_for_admin(db_pool: asyncpg.Pool) -> None:
     current_user_role.set("admin")
     result = await draft_seller_response(review_id=str(uuid.uuid4()))
-    assert result["error"] != "permission_denied"
+    assert result["error"] == "permission_denied"
 
 
 async def test_calculate_fulfillment_plan_denied_for_customer() -> None:
     current_user_role.set("customer")
     result = await calculate_fulfillment_plan(product_ids=[], destination_region="east")
     assert result["error"] == "permission_denied"
-    assert "seller" in result["required_roles"]
+    assert "store_manager" in result["required_roles"]
 
 
-async def test_calculate_fulfillment_plan_allowed_for_seller() -> None:
-    current_user_role.set("seller")
+async def test_calculate_fulfillment_plan_allowed_for_store_manager() -> None:
+    current_user_role.set("store_manager")
     # Empty product_ids short-circuits before any DB access — proves pass-through
     # without needing seed data.
     result = await calculate_fulfillment_plan(product_ids=[], destination_region="east")
     assert result == {"error": "No product IDs provided"}
 
 
-async def test_place_backorder_denied_for_customer() -> None:
-    current_user_role.set("customer")
+async def test_place_backorder_denied_for_manager() -> None:
+    current_user_role.set("store_manager")
     result = await place_backorder(product_id=str(uuid.uuid4()), quantity=1)
     assert result["error"] == "permission_denied"
-    assert "seller" in result["required_roles"]
+    assert "customer" in result["required_roles"]
 
 
-async def test_place_backorder_allowed_for_seller() -> None:
-    current_user_role.set("seller")
+async def test_place_backorder_allowed_for_customer() -> None:
+    current_user_role.set("customer")
     # No user context set — reaches the tool's own "no user" guard clause,
     # proving the role check passed through without needing seed data.
     result = await place_backorder(product_id=str(uuid.uuid4()), quantity=1)
     assert result["error"] != "permission_denied"
 
 
-# ─────────────────────── customer/seller/admin tools ─────────────────────────
+# ─────────────────────── customer/store_manager tools ─────────────────────────
 
 
 async def test_cancel_order_denied_with_no_role() -> None:
@@ -147,19 +147,18 @@ async def test_process_refund_allowed_for_customer() -> None:
     assert result["error"] != "permission_denied"
 
 
-async def test_process_refund_allowed_for_admin() -> None:
+async def test_process_refund_denied_for_admin() -> None:
     current_user_role.set("admin")
     result = await process_refund(return_id=str(uuid.uuid4()))
-    assert result["error"] != "permission_denied"
+    assert result["error"] == "permission_denied"
 
 
-# ─────────────────────── disabled bypass (representative) ────────────────────
+# ─────────────────────── always-on authorization (representative) ────────────────────
 
 
-async def test_guardrails_disabled_bypasses_tool_guard(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_guardrails_disabled_still_denies_wrong_role(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "GUARDRAILS_ENABLED", False)
     current_user_role.set("customer")
     result = await calculate_fulfillment_plan(product_ids=[], destination_region="east")
-    # With guardrails off, the role check is skipped entirely and we reach the
-    # tool's own validation ("No product IDs provided"), not permission_denied.
-    assert result == {"error": "No product IDs provided"}
+    # Content-safety settings never disable business authorization.
+    assert result["error"] == "permission_denied"

@@ -69,6 +69,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (storedUser && storedToken) {
         const user = JSON.parse(storedUser) as User;
+        if (user.role === "seller" || user.role === "power_user") {
+          clearAuth();
+          setState({ user: null, isLoading: false });
+          return;
+        }
         const storedRefresh = localStorage.getItem(STORAGE_KEY_REFRESH);
         api.setToken(storedToken);
         api.setRefreshToken(storedRefresh);

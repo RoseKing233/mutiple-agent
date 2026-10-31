@@ -14,8 +14,7 @@ from review_sentiment.tools import (
     search_reviews,
 )
 from shared.agent_factory import create_chat_client
-from shared.context import current_user_role
-from shared.context_providers import ECommerceContextProvider
+from shared.context_providers import ECommerceContextProvider, RoleInstructionsProvider
 from shared.middleware import build_specialist_middleware
 from shared.tools.memory_tools import recall_memories, store_memory
 from shared.tools.product_lookup_tools import find_product_by_name
@@ -47,8 +46,8 @@ def create_review_sentiment_agent() -> Agent:
             "Product review analysis with sentiment breakdown, topic insights, trend tracking, "
             "fake review detection, and cross-product comparisons."
         ),
-        instructions=get_system_prompt(current_user_role.get() or "customer"),
+        instructions=get_system_prompt(None),
         tools=AGENT_TOOLS,
-        context_providers=[ECommerceContextProvider()],
+        context_providers=[ECommerceContextProvider(), RoleInstructionsProvider("review-sentiment")],
         middleware=build_specialist_middleware(),
     )

@@ -10,6 +10,7 @@ import {
   Clock,
   Navigation,
 } from "lucide-react";
+import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { OrderStatusBadge } from "@/components/status-badge";
 import { formatPrice, formatDate } from "@/lib/format";
@@ -91,6 +92,8 @@ function isReturnEligible(data: OrderData): boolean {
 }
 
 export function ChatOrderCard({ data, onAction }: ChatOrderCardProps) {
+  const { user } = useAuth();
+  const isCustomer = user?.role === "customer";
   const orderId = data.id || data.order_id || "";
   const shortId =
     orderId.length > 12
@@ -112,14 +115,14 @@ export function ChatOrderCard({ data, onAction }: ChatOrderCardProps) {
           {data.status && <OrderStatusBadge status={data.status} />}
         </div>
         <div className="flex items-center gap-1.5">
-          {orderId && (
+          {isCustomer && orderId && (
             <Link href={`/orders/${orderId}`} target="_blank" rel="noopener noreferrer">
               <Button size="sm" variant="outline" className="h-7 text-xs">
                 <ExternalLink className="mr-1 size-3" /> View
               </Button>
             </Link>
           )}
-          {(data.tracking || data.carrier) && onAction && (
+          {isCustomer && (data.tracking || data.carrier) && onAction && (
             <Button
               variant="outline"
               size="sm"
@@ -130,7 +133,7 @@ export function ChatOrderCard({ data, onAction }: ChatOrderCardProps) {
               Track
             </Button>
           )}
-          {(data.status === "placed" || data.status === "confirmed") && (
+          {isCustomer && (data.status === "placed" || data.status === "confirmed") && (
             <Button
               variant="outline"
               size="sm"
@@ -140,7 +143,7 @@ export function ChatOrderCard({ data, onAction }: ChatOrderCardProps) {
               Cancel
             </Button>
           )}
-          {returnEligible && (
+          {isCustomer && returnEligible && (
             <Button
               variant="outline"
               size="sm"

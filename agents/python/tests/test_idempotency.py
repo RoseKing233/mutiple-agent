@@ -244,6 +244,8 @@ async def test_no_identity_skips_idempotency_entirely_without_touching_the_pool(
 async def test_initiate_return_retry_replays_the_original_return_instead_of_erroring(db_pool: asyncpg.Pool) -> None:
     from shared.tools.return_tools import initiate_return
 
+    current_user_role.set("customer")
+
     user_id = await _seed_user(db_pool, email="retry@example.com")
     order_id = await _seed_order(db_pool, user_id, status="delivered", total=50.0)
     current_user_email.set("retry@example.com")
@@ -265,10 +267,17 @@ async def test_initiate_return_retry_replays_the_original_return_instead_of_erro
 
     count = await db_pool.fetchval("SELECT COUNT(*) FROM returns WHERE order_id = $1", order_id)
     assert count == 1, "only one returns row may exist no matter how many times the identical call retries"
+    # A cached customer success must not bypass a later role check.
+    for role in ["store_manager", "admin"]:
+        current_user_role.set(role)
+        assert (await initiate_return(order_id=str(order_id), reason="wrong size"))["error"] == "permission_denied"
+
 
 
 async def test_initiate_return_rejects_order_outside_the_return_window(db_pool: asyncpg.Pool) -> None:
     from shared.tools.return_tools import initiate_return
+
+    current_user_role.set("customer")
 
     user_id = await _seed_user(db_pool, email="expired-return@example.com")
     order_id = await _seed_order(db_pool, user_id, status="delivered", total=50.0)
@@ -287,6 +296,8 @@ async def test_initiate_return_rejects_order_outside_the_return_window(db_pool: 
 
 async def test_initiate_return_remains_eligible_through_thirty_days(db_pool: asyncpg.Pool) -> None:
     from shared.tools.return_tools import initiate_return
+
+    current_user_role.set("customer")
 
     user_id = await _seed_user(db_pool, email="return-window@example.com")
     order_id = await _seed_order(db_pool, status="delivered", total=50.0, user_id=user_id)

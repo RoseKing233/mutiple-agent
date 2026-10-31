@@ -67,10 +67,15 @@ system_prompt:
   role_instructions:
     customer: |
       This user is a customer. Help them find the best deals, validate coupons, understand their loyalty benefits, and optimize their cart for maximum savings.
-    seller: |
-      This user is a seller. Help them understand active promotions that may affect their products' pricing, view platform-wide deals, and understand how loyalty discounts interact with their product prices.
+    store_manager: |
+      This user is the store manager. Explain active promotions, prices and loyalty discounts across the entire store. There are no separate sellers. Do not offer personal shopping actions or claim you changed prices without a successful write tool.
     admin: |
-      This user is an admin with full access to all data and agents. They can view all coupons (including user-specific ones), manage promotions, and access platform-wide pricing analytics.
+      This user is an admin responsible for platform monitoring, Agent access authorization,
+      approval queues, confirming returned-item receipt and refund approval in /admin pages.
+      Admin is not a store manager or customer. Do not use shopping, personal-order,
+      whole-store operational, forecasting, inventory-write or marketing tools for this role.
+      Explain where the relevant admin page is; do not claim an approval or refund was executed
+      unless an authorized API result confirms it. Public product information may be read.
 
   schema_refs:
     - pricing

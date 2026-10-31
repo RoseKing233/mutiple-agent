@@ -23,6 +23,7 @@ import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
+from shared import store_management
 from shared.config import settings
 from shared.context import current_session_id, current_user_email, current_user_role
 from shared.db import get_pool
@@ -164,6 +165,9 @@ async def require_auth(request: Request) -> dict[str, Any]:
         if payload.get("type") != "access":
             raise HTTPException(status_code=401, detail="Invalid token type")
 
+    if payload.get("role") in {"seller", "power_user"}:
+        raise HTTPException(status_code=401, detail="Account role changed. Please sign in again.")
+
     current_user_email.set(payload.get("sub", ""))
     current_user_role.set(payload.get("role", "customer"))
     current_session_id.set(request.headers.get("x-session-id", ""))
@@ -196,17 +200,17 @@ async def require_admin(user: dict[str, Any] = Depends(require_auth)) -> dict[st
     return user
 
 
-async def require_seller(user: dict[str, Any] = Depends(require_auth)) -> dict[str, Any]:
-    """Require the authenticated user to have seller or admin role."""
-    if user.get("role") not in ("seller", "admin"):
-        raise HTTPException(status_code=403, detail="Seller access required")
+async def require_store_manager(user: dict[str, Any] = Depends(require_auth)) -> dict[str, Any]:
+    """Require a store manager for whole-store operations."""
+    if user.get("role") != "store_manager":
+        raise HTTPException(status_code=403, detail="Store manager access required")
     return user
 
 
 async def require_shopper(user: dict[str, Any] = Depends(require_auth)) -> dict[str, Any]:
     """Store managers use management APIs, not personal shopping operations."""
-    if user.get("role") == "store_manager":
-        raise HTTPException(status_code=403, detail="Shopping actions are unavailable for store managers")
+    if user.get("role") != "customer":
+        raise HTTPException(status_code=403, detail="Customer account required for shopping actions")
     return user
 
 
@@ -2787,159 +2791,42 @@ async def delete_user_memory(
     return {"deleted": True}
 
 
-# ── Seller Routes ────────────────────────────────────────────
+# ── Whole-store operations (legacy seller URLs remain aliases) ──
 
 
-@router.get("/api/seller/products")
-async def list_seller_products(
+@router.get("/api/seller/products", deprecated=True)
+@router.get("/api/manager/store/products")
+async def list_store_products(
     category: str | None = None,
     limit: int = 50,
     offset: int = 0,
-    user: dict[str, Any] = Depends(require_seller),
+    _user: dict[str, Any] = Depends(require_store_manager),
 ) -> dict[str, Any]:
-    """List products owned by the authenticated seller."""
-    pool = get_pool()
-    safe_limit = clamp_limit(limit, default=50, maximum=200)
-    safe_offset = max(0, int(offset))
-    user_id = user.get("user_id", "")
-
-    conditions = ["p.seller_id = $1"]
-    args: list = [user_id]
-    idx = 2
-
-    if category:
-        conditions.append(f"p.category = ${idx}")
-        args.append(category)
-        idx += 1
-
-    where = " AND ".join(conditions)
-    rows = await pool.fetch(
-        f"""SELECT p.id, p.name, p.description, p.category, p.brand, p.price,
-                   p.original_price, p.image_url, p.rating, p.review_count, p.is_active
-            FROM products p WHERE {where}
-            ORDER BY p.created_at DESC
-            LIMIT {safe_limit} OFFSET {safe_offset}""",
-        *args,
-    )
-    total = await pool.fetchval(f"SELECT COUNT(*) FROM products p WHERE {where}", *args)
-
-    return {
-        "products": [
-            {
-                "id": str(r["id"]),
-                "name": r["name"],
-                "description": r["description"][:200],
-                "category": r["category"],
-                "brand": r["brand"],
-                "price": float(r["price"]),
-                "original_price": float(r["original_price"]) if r["original_price"] else None,
-                "image_url": r["image_url"],
-                "rating": float(r["rating"]),
-                "review_count": r["review_count"],
-                "is_active": r["is_active"],
-            }
-            for r in rows
-        ],
-        "total": total,
-    }
+    """Read the whole catalog; legacy seller URLs are manager-only aliases."""
+    async with get_pool().acquire() as conn:
+        return await store_management.list_products(
+            conn, category, clamp_limit(limit, default=50, maximum=200), max(0, offset)
+        )
 
 
-@router.get("/api/seller/orders")
-async def list_seller_orders(
+@router.get("/api/seller/orders", deprecated=True)
+@router.get("/api/manager/orders")
+async def list_store_orders(
     status: str | None = None,
     limit: int = 20,
     offset: int = 0,
-    user: dict[str, Any] = Depends(require_seller),
+    _user: dict[str, Any] = Depends(require_store_manager),
 ) -> dict[str, Any]:
-    """List orders containing the authenticated seller's products."""
-    pool = get_pool()
-    safe_limit = clamp_limit(limit, default=20, maximum=200)
-    safe_offset = max(0, int(offset))
-    user_id = user.get("user_id", "")
-
-    conditions = ["p.seller_id = $1"]
-    args: list = [user_id]
-    idx = 2
-
-    if status:
-        conditions.append(f"o.status = ${idx}")
-        args.append(status)
-        idx += 1
-
-    where = " AND ".join(conditions)
-    rows = await pool.fetch(
-        f"""SELECT DISTINCT o.id, o.status, o.total, o.created_at,
-                   buyer.name as buyer_name, buyer.email as buyer_email,
-                   COUNT(oi.id) as item_count
-            FROM orders o
-            JOIN order_items oi ON oi.order_id = o.id
-            JOIN products p ON oi.product_id = p.id
-            JOIN users buyer ON o.user_id = buyer.id
-            WHERE {where}
-            GROUP BY o.id, o.status, o.total, o.created_at, buyer.name, buyer.email
-            ORDER BY o.created_at DESC
-            LIMIT {safe_limit} OFFSET {safe_offset}""",
-        *args,
-    )
-    total = await pool.fetchval(
-        f"""SELECT COUNT(DISTINCT o.id)
-            FROM orders o
-            JOIN order_items oi ON oi.order_id = o.id
-            JOIN products p ON oi.product_id = p.id
-            WHERE {where}""",
-        *args,
-    )
-
-    return {
-        "orders": [
-            {
-                "id": str(r["id"]),
-                "status": r["status"],
-                "total": float(r["total"]),
-                "date": r["created_at"].isoformat(),
-                "buyer_name": r["buyer_name"],
-                "buyer_email": r["buyer_email"],
-                "item_count": r["item_count"],
-            }
-            for r in rows
-        ],
-        "total": total,
-    }
+    """Read all store orders, including orders for newly created or unowned products."""
+    async with get_pool().acquire() as conn:
+        return await store_management.list_orders(
+            conn, status, clamp_limit(limit, default=20, maximum=200), max(0, offset)
+        )
 
 
-@router.get("/api/seller/stats")
-async def get_seller_stats(user: dict[str, Any] = Depends(require_seller)) -> dict[str, Any]:
-    """Get aggregate sales statistics for the authenticated seller."""
-    pool = get_pool()
-    user_id = user.get("user_id", "")
-
-    product_count = await pool.fetchval(
-        "SELECT COUNT(*) FROM products WHERE seller_id = $1",
-        user_id,
-    )
-    total_revenue = await pool.fetchval(
-        """SELECT COALESCE(SUM(oi.subtotal), 0)
-           FROM order_items oi
-           JOIN products p ON oi.product_id = p.id
-           WHERE p.seller_id = $1""",
-        user_id,
-    )
-    order_count = await pool.fetchval(
-        """SELECT COUNT(DISTINCT o.id)
-           FROM orders o
-           JOIN order_items oi ON oi.order_id = o.id
-           JOIN products p ON oi.product_id = p.id
-           WHERE p.seller_id = $1""",
-        user_id,
-    )
-    avg_rating = await pool.fetchval(
-        "SELECT COALESCE(AVG(rating), 0) FROM products WHERE seller_id = $1",
-        user_id,
-    )
-
-    return {
-        "product_count": product_count,
-        "total_revenue": float(total_revenue),
-        "order_count": order_count,
-        "avg_rating": round(float(avg_rating), 2),
-    }
+@router.get("/api/seller/stats", deprecated=True)
+@router.get("/api/manager/store/stats")
+async def get_store_stats(_user: dict[str, Any] = Depends(require_store_manager)) -> dict[str, Any]:
+    """Whole-store operational metrics, not seller-scoped figures."""
+    async with get_pool().acquire() as conn:
+        return await store_management.statistics(conn)

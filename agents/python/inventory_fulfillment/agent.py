@@ -27,9 +27,12 @@ from shared.tools.inventory_management_tools import INVENTORY_MANAGEMENT_TOOLS
 from shared.tools.inventory_tools import check_stock, get_warehouse_availability
 from shared.tools.product_lookup_tools import find_product_by_name
 from shared.tools.sales_analysis_tools import SALES_ANALYSIS_TOOLS
+from shared.tools.store_tools import get_store_inventory, get_store_stats
 from shared.tools.user_tools import get_user_profile
 
 AGENT_TOOLS = [
+    get_store_inventory,
+    get_store_stats,
     find_product_by_name,
     check_stock,
     get_warehouse_availability,
@@ -71,6 +74,8 @@ def create_inventory_fulfillment_agent() -> Agent:
         )
         tools: list = [
             mcp_inventory,
+            get_store_inventory,
+            get_store_stats,
             find_product_by_name,
             get_tracking_status,
             calculate_fulfillment_plan,

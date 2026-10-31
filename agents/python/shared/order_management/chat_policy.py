@@ -27,7 +27,7 @@ _STATUS_ONLY = re.compile(
 
 def required_order_tool(message: str, agent_name: str, role: str) -> str | None:
     """Require cancel_order only for an authorized role and explicit order UUID."""
-    if agent_name != "order-management" or role not in {"customer", "seller", "admin"}:
+    if agent_name != "order-management" or role != "customer":
         return None
     if not _ORDER_ID.search(message):
         return None

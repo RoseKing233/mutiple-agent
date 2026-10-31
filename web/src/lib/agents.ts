@@ -50,7 +50,7 @@ export const AGENTS: AgentMeta[] = [
     tools: [
       { name: "search_products", description: "Keyword + filter search across the catalog by category, price range, rating, or any combination." },
       { name: "semantic_search", description: "Embedding-based similarity search (pgvector). Best for vague queries like 'something cozy for winter'." },
-      { name: "get_product_details", description: "Full specs, pricing, stock status, and seller info for a specific product." },
+      { name: "get_product_details", description: "Full specs, pricing, stock status, and store information for a specific product." },
       { name: "compare_products", description: "Side-by-side attribute comparison for 2–3 products." },
       { name: "find_similar_products", description: "Find products similar to a given one using cosine similarity on 1536-dim embeddings." },
       { name: "get_trending_products", description: "Top products by recent order volume, optionally filtered by category." },
@@ -140,7 +140,7 @@ export const AGENTS: AgentMeta[] = [
     role: "Reviews & Sentiment Analysis",
     tagline: "Deep review analysis — sentiment breakdown, topic insights, trend tracking, and fake review detection.",
     description:
-      "Review & Sentiment goes beyond star ratings. It breaks reviews down by topic (quality, value, design, shipping), tracks sentiment over time, detects suspicious or fake reviews, and surfaces the genuine signal in customer feedback. Sellers can also use it to draft professional responses to reviews.",
+      "Review & Sentiment goes beyond star ratings. It breaks reviews down by topic (quality, value, design, shipping), tracks sentiment over time, detects suspicious or fake reviews, and surfaces the genuine signal in customer feedback. Store managers can also use it to draft professional responses to reviews.",
     icon: Star,
     accentText: "text-emerald-600 dark:text-emerald-400",
     accentBg: "bg-emerald-50 dark:bg-emerald-950",
@@ -151,7 +151,7 @@ export const AGENTS: AgentMeta[] = [
       { name: "get_sentiment_trend", description: "Monthly average ratings over time to spot whether sentiment is improving or declining." },
       { name: "detect_fake_reviews", description: "Flag suspicious reviews by checking for verified-purchase status, generic language patterns, and rating outliers." },
       { name: "search_reviews", description: "Keyword search inside review titles and bodies for a specific product." },
-      { name: "draft_seller_response", description: "Draft a professional seller response to a review (seller/admin role required)." },
+      { name: "draft_seller_response", description: "Draft a professional store response to a review (manager/admin role required)." },
       { name: "compare_product_reviews", description: "Cross-product review comparison — useful for deciding between two similar products." },
     ],
     examplePrompts: [

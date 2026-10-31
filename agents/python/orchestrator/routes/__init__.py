@@ -15,7 +15,7 @@ from fastapi import APIRouter
 from shared.config import settings
 
 from . import chat, inventory, legacy, manager, marketing, orchestration, recommendations
-from .legacy import optional_auth, require_admin, require_auth, require_seller
+from .legacy import optional_auth, require_admin, require_auth, require_store_manager
 
 router = APIRouter()
 router.include_router(legacy.router)
@@ -32,5 +32,5 @@ __all__ = [
     "optional_auth",
     "require_auth",
     "require_admin",
-    "require_seller",
+    "require_store_manager",
 ]

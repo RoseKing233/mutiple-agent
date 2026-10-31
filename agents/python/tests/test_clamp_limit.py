@@ -83,7 +83,7 @@ def test_every_tool_imports_clamp_limit() -> None:
     expected = {
         "order_management/tools.py",
         "shared/tools/memory_tools.py",
-        "shared/tools/seller_tools.py",
+        "shared/tools/store_tools.py",
         "product_discovery/tools.py",
         "orchestrator/routes/legacy.py",
     }

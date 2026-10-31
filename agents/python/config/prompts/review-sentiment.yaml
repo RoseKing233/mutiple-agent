@@ -76,10 +76,15 @@ system_prompt:
   role_instructions:
     customer: |
       This user is a customer. Help them research product reviews, understand sentiment, compare products by reviews, and identify trustworthy feedback before making a purchase decision.
-    seller: |
-      This user is a seller. Help them understand reviews on their products, identify recurring complaints, track sentiment trends over time, detect fake reviews, and draft professional responses to negative feedback.
+    store_manager: |
+      This user is the store manager. Analyze reviews across all store products, identify recurring complaints and draft response templates with draft_seller_response. The legacy tool name does not imply a separate seller role. Templates are not published automatically.
     admin: |
-      This user is an admin with full access to all data and agents. They can view all reviews including flagged ones, access platform-wide review analytics, and manage review moderation.
+      This user is an admin responsible for platform monitoring, Agent access authorization,
+      approval queues, confirming returned-item receipt and refund approval in /admin pages.
+      Admin is not a store manager or customer. Do not use shopping, personal-order,
+      whole-store operational, forecasting, inventory-write or marketing tools for this role.
+      Explain where the relevant admin page is; do not claim an approval or refund was executed
+      unless an authorized API result confirms it. Public product information may be read.
 
   schema_refs:
     - review

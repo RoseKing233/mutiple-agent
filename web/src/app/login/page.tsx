@@ -3,6 +3,7 @@
 import { useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { roleHome } from "@/lib/role-access";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import {
@@ -36,7 +37,7 @@ export default function LoginPage() {
     setIsLoading(true);
     try {
       const user = await login(email, password);
-      router.push(user.role === "store_manager" ? "/analysis" : "/chat");
+      router.push(roleHome(user.role));
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Login failed. Please try again.";

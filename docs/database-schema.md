@@ -317,7 +317,7 @@ erDiagram
 
 | Table | Key Columns | Notes |
 |-------|-------------|-------|
-| **users** | `id` (PK), `email` (unique), `password_hash`, `name`, `role`, `loyalty_tier`, `total_spend`, `is_active` | Roles: `customer`, `power_user`, `seller`, `admin`. Loyalty tiers: `bronze`, `silver`, `gold`. Passwords hashed with bcrypt. |
+| **users** | `id` (PK), `email` (unique), `password_hash`, `name`, `role`, `loyalty_tier`, `total_spend`, `is_active` | Roles: `customer`, `store_manager`, `admin` (single store; see migration 007). Loyalty tiers: `bronze`, `silver`, `gold`. Passwords hashed with bcrypt. |
 
 ### Product Catalog
 
@@ -499,7 +499,7 @@ The seeder (`scripts/seed.py`) populates the database with deterministic data (`
 
 | Table | Count | Details |
 |-------|-------|---------|
-| users | 20 | 1 admin, 2 power users, 2 sellers, 15 customers |
+| users | 19 | 1 admin, 1 manager, 17 customers in a newly seeded course database |
 | products | 50 | 10 per category (Electronics, Clothing, Home, Sports, Books) |
 | product_embeddings | 0 | **Not seeded.** Run `scripts/generate_embeddings.py` separately to populate all 50 |
 | orders | 200 | Distributed across statuses (placed through delivered/cancelled) |

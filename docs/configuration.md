@@ -23,6 +23,35 @@ auto-loads a file with that name from the project directory — anything else re
 `--env-file` on every single `docker compose` invocation, which would break the plain
 `docker compose up` that the quick start advertises.
 
+## Model-specific sampling parameters
+
+Changing `LLM_MODEL` can also change which request parameters a model accepts.
+The Python backend uses `shared/llm_options.py` to omit custom `temperature` for
+GPT-5/o-series reasoning requests, including `gpt-5.6-luna`. Other models retain
+the configured `LLM_TEMPERATURE`. Native agent execution and direct SDK calls for
+inventory explanations and marketing copy share this policy; reasoning effort is
+not changed. A provider HTTP 400 saying `temperature` is unsupported is a request
+compatibility error, not a failed Docker startup or necessarily a bad API key.
+
+### 2026-10-31 local compatibility fix
+
+The local `gpt-5.6-luna` chat failures returned HTTP 400 with
+`Unsupported parameter: 'temperature' is not supported with this model.`
+The shared sampling policy fixes native streaming/non-streaming chat, inventory
+rationales and marketing-copy SDK calls without changing the selected model,
+reasoning effort, tool policy or credentials. MAF already maps its `max_tokens`
+option to the Responses API's `max_output_tokens`; the recommendation limit was
+left unchanged and verified with a real request.
+
+Validation: two targeted runs passed (106 passed/2 skipped and 103 passed;
+the runs overlap and should not be added). Tests cover the outgoing SDK JSON,
+legacy-model sampling, native tool selection, agent execution and related
+inventory/marketing/recommendation paths. Real-model checks also passed for a
+Chinese greeting, a read-only customer product query, manager store statistics,
+and one Chinese product assessment with sources. These manual checks created
+test conversations and usage records, but no orders, inventory changes or images.
+The updated backend Docker images were rebuilt and the six agent services restarted.
+
 ## How one file reaches four consumers
 
 ```mermaid

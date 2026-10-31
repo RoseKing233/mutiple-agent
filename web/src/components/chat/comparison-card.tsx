@@ -38,7 +38,7 @@ function AddToCartButton({
   onAction?: (message: string) => void;
 }) {
   const { cart, addItem } = useCart();
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const router = useRouter();
   const [optimistic, setOptimistic] = useState(false);
   const [error, setError] = useState(false);
@@ -46,7 +46,7 @@ function AddToCartButton({
   const inCart = !!product.id && !!cart?.items?.some((i) => i.product_id === product.id);
   const added = inCart || optimistic;
 
-  if (!product.id) return null;
+  if (!product.id || (isAuthenticated && user?.role !== "customer")) return null;
 
   if (!isAuthenticated) {
     return (
@@ -116,7 +116,7 @@ function ProductColumn({
   isBetterRated: boolean;
   onAction?: (message: string) => void;
 }) {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   return (
     <div className="flex flex-col gap-2 min-w-0">
       {/* Product image */}

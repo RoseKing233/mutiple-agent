@@ -196,9 +196,17 @@ AZURE_OPENAI_API_VERSION=2024-12-01-preview
 - Sales/inventory simulation: `scripts/sales_data/`, default 180 complete UTC days; see `docs/sales-analysis/README.md`.
 - Stock mutations must use `shared.inventory_ledger.change_inventory` inside the business transaction.
 - Migration runner: `python -m scripts.migrate`; repeated execution preserves data and verifies SQL checksums.
-- Manager role: `store_manager` (whole-store, read-only analysis), distinct from `admin` and `seller`.
+- Business roles are `customer`, `store_manager`, and `admin`. This is a single store, not a multi-seller marketplace.
+- Managers operate all products, warehouses, inventory, sales analysis, operational order reads and review templates.
+- Migration 007 converts legacy sellers to managers and power users to customers without deleting their data or passwords.
+- `products.seller_id` is a legacy reference only; never use it as a manager authorization filter.
+- `/management` is the whole-store overview; `/api/manager/orders` and `/api/manager/store/*` share `shared/store_management.py` with AI tools.
+- Customer shopping/order/return tools and APIs require customer and remain owner-scoped.
+- Manager operations require store_manager only; admin does not inherit manager or customer privileges.
+- Admin uses platform monitoring, Agent access approvals and return receipt/refund approval APIs.
+- Tool role authorization is always enforced, independently of GUARDRAILS_ENABLED content-safety controls.
 - Manager APIs: `orchestrator/routes/manager.py`, shared calculations in `shared/sales_analysis.py`.
-- Manager UI: `/analysis`, role-aware `/products` and `/products/[id]`; customer shopping is blocked for managers.
+- Manager UI: `/management`, `/analysis`, `/inventory`, role-aware `/products` and `/products/[id]`; shopping is customer-only and admin uses /admin.
 - Forecasts/performance: `shared/forecasting/`; immutable owner-scoped reports in `sales_analysis_runs` (migration 003).
 - Inventory agent registers `shared/tools/sales_analysis_tools.py` in direct and MCP modes. Its YAML role block is
   injected by `InventoryRoleProvider` on every run because A2A hosts retain their Agent instance across requests.

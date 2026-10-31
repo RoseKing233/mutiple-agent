@@ -3,7 +3,7 @@ export function isStoreManager(role?: string): boolean {
 }
 
 export function canAnalyze(role?: string): boolean {
-  return isStoreManager(role) || role === "admin";
+  return isStoreManager(role);
 }
 
 export function defaultAnalysisDates(now = new Date()) {

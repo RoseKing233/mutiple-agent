@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { ShoppingCart, ArrowRight, MapPin } from "lucide-react";
+import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { formatPrice } from "@/lib/format";
 
@@ -33,6 +34,7 @@ function formatAddress(addr: CheckoutData["shipping_address"]): string | null {
 }
 
 export function ChatCheckoutCard({ data }: { data: CheckoutData }) {
+  const { user } = useAuth();
   const items = data.items || [];
   const itemCount = data.item_count ?? items.reduce((n, i) => n + (i.quantity || 1), 0);
   const subtotal = data.subtotal ?? items.reduce((s, i) => s + (i.subtotal ?? (i.unit_price ?? i.price ?? 0) * (i.quantity || 1)), 0);
@@ -101,12 +103,12 @@ export function ChatCheckoutCard({ data }: { data: CheckoutData }) {
           <span className="text-xs text-muted-foreground">Total</span>
           <span className="text-lg font-bold text-primary">{formatPrice(total)}</span>
         </div>
-        <Link href="/checkout">
+        {user?.role === "customer" && <Link href="/checkout">
           <Button className="w-full gap-2 bg-primary hover:opacity-90 text-primary-foreground">
             Complete Checkout
             <ArrowRight className="size-4" />
           </Button>
-        </Link>
+        </Link>}
       </div>
     </div>
   );

@@ -5,7 +5,7 @@ describe("manager filters and roles", () => {
   it("separates managers, admins and shoppers", () => {
     expect(isStoreManager("store_manager")).toBe(true);
     expect(isStoreManager("admin")).toBe(false);
-    expect(canAnalyze("admin")).toBe(true);
+    expect(canAnalyze("admin")).toBe(false);
     expect(canAnalyze("customer")).toBe(false);
     expect(canAnalyze("seller")).toBe(false);
   });

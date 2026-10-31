@@ -37,7 +37,7 @@ def test_status_checks_negations_or_missing_order_id_do_not_force_cancellation(m
     assert required_order_tool(message, "order-management", "customer") is None
 
 
-@pytest.mark.parametrize("role", ["anonymous", "power_user", "store_manager"])
+@pytest.mark.parametrize("role", ["anonymous", "power_user", "store_manager", "admin"])
 def test_unsupported_role_does_not_force_customer_cancellation(role: str) -> None:
     assert required_order_tool(f"Please cancel order {ORDER_ID}.", "order-management", role) is None
 

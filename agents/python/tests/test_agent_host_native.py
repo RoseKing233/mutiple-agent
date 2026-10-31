@@ -223,11 +223,13 @@ async def test_run_agent_native_returns_response_text() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_agent_native_pins_temperature() -> None:
+async def test_run_agent_native_pins_temperature(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every run must carry the configured temperature so identical queries
     produce consistent answers (provider default ~1.0 makes them diverge)."""
     from shared.config import settings
 
+    monkeypatch.setattr(settings, "LLM_MODEL", "gpt-4.1")
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "openai")
     agent = _FakeAgent("ok")
     await _run_agent_native(agent, "hi")
     assert agent.last_options is not None

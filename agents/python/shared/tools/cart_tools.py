@@ -67,8 +67,8 @@ async def add_to_cart(
     product_id: Annotated[str, Field(description="UUID of the product to add")],
     quantity: Annotated[int, Field(description="Quantity to add (default 1)")] = 1,
 ) -> dict:
-    if current_user_role.get() == "store_manager":
-        return {"error": "permission_denied", "message": "Store managers cannot use customer shopping tools"}
+    if current_user_role.get() != "customer":
+        return {"error": "permission_denied", "message": "Customer account required for shopping tools"}
     email = current_user_email.get()
     if not email:
         return {"error": "No user context available"}
@@ -123,8 +123,8 @@ async def add_to_cart(
 
 @tool(name="get_cart", description="Get the user's current shopping cart with all items, totals, and addresses.")
 async def get_cart() -> dict:
-    if current_user_role.get() == "store_manager":
-        return {"error": "permission_denied", "message": "Store managers cannot use customer shopping tools"}
+    if current_user_role.get() != "customer":
+        return {"error": "permission_denied", "message": "Customer account required for shopping tools"}
     email = current_user_email.get()
     if not email:
         return {"error": "No user context available"}
@@ -204,8 +204,8 @@ async def get_cart() -> dict:
 async def remove_from_cart(
     product_id: Annotated[str, Field(description="UUID of the product to remove")],
 ) -> dict:
-    if current_user_role.get() == "store_manager":
-        return {"error": "permission_denied", "message": "Store managers cannot use customer shopping tools"}
+    if current_user_role.get() != "customer":
+        return {"error": "permission_denied", "message": "Customer account required for shopping tools"}
     email = current_user_email.get()
     if not email:
         return {"error": "No user context available"}
@@ -249,8 +249,8 @@ async def update_cart_quantity(
     product_id: Annotated[str, Field(description="UUID of the product to update")],
     quantity: Annotated[int, Field(description="New quantity for the product")],
 ) -> dict:
-    if current_user_role.get() == "store_manager":
-        return {"error": "permission_denied", "message": "Store managers cannot use customer shopping tools"}
+    if current_user_role.get() != "customer":
+        return {"error": "permission_denied", "message": "Customer account required for shopping tools"}
     email = current_user_email.get()
     if not email:
         return {"error": "No user context available"}
@@ -324,8 +324,8 @@ async def set_shipping_address(
     country: Annotated[str, Field(description="Country code (default US)")] = "US",
     phone: Annotated[str, Field(description="Phone number (optional)")] = "",
 ) -> dict:
-    if current_user_role.get() == "store_manager":
-        return {"error": "permission_denied", "message": "Store managers cannot use customer shopping tools"}
+    if current_user_role.get() != "customer":
+        return {"error": "permission_denied", "message": "Customer account required for shopping tools"}
     email = current_user_email.get()
     if not email:
         return {"error": "No user context available"}
@@ -371,8 +371,8 @@ async def set_billing_address(
     country: Annotated[str, Field(description="Country code (default US)")] = "US",
     phone: Annotated[str, Field(description="Phone number (optional)")] = "",
 ) -> dict:
-    if current_user_role.get() == "store_manager":
-        return {"error": "permission_denied", "message": "Store managers cannot use customer shopping tools"}
+    if current_user_role.get() != "customer":
+        return {"error": "permission_denied", "message": "Customer account required for shopping tools"}
     email = current_user_email.get()
     if not email:
         return {"error": "No user context available"}
@@ -411,8 +411,8 @@ async def set_billing_address(
 
 @tool(name="set_billing_same_as_shipping", description="Set the billing address to be the same as the shipping address.")
 async def set_billing_same_as_shipping() -> dict:
-    if current_user_role.get() == "store_manager":
-        return {"error": "permission_denied", "message": "Store managers cannot use customer shopping tools"}
+    if current_user_role.get() != "customer":
+        return {"error": "permission_denied", "message": "Customer account required for shopping tools"}
     email = current_user_email.get()
     if not email:
         return {"error": "No user context available"}
@@ -458,8 +458,8 @@ async def set_billing_same_as_shipping() -> dict:
 async def apply_coupon_to_cart(
     code: Annotated[str, Field(description="Coupon code to apply")],
 ) -> dict:
-    if current_user_role.get() == "store_manager":
-        return {"error": "permission_denied", "message": "Store managers cannot use customer shopping tools"}
+    if current_user_role.get() != "customer":
+        return {"error": "permission_denied", "message": "Customer account required for shopping tools"}
     email = current_user_email.get()
     if not email:
         return {"error": "No user context available"}

@@ -109,6 +109,8 @@ class Settings(BaseSettings):
     # reproducible answers — at the provider default (~1.0) the same query can
     # yield categorically different results (e.g. finding vs. not finding a
     # borderline-priced product). Raise toward 1.0 for more varied phrasing.
+    # shared.llm_options omits this field for GPT-5/o-series reasoning models
+    # whose default reasoning requests reject custom sampling temperatures.
     LLM_TEMPERATURE: float = 0.2
     EMBEDDING_MODEL: str = "text-embedding-3-small"
     OPENAI_API_KEY: str = ""
@@ -277,7 +279,7 @@ class Settings(BaseSettings):
 
     # ── Guardrails (Track A — security) ─────────────────────────────
     # Master switch for the code-layer guardrails (output sanitization,
-    # injection detection, role enforcement). Safe default: on.
+    # injection detection). Business role authorization is always enforced.
     GUARDRAILS_ENABLED: bool = True
 
     # Neutralize stored / indirect injection in tool outputs before they

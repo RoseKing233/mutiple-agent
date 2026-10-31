@@ -11,6 +11,8 @@ import {
  */
 import type { ForecastParameters, ForecastRun, ManagerAnalysis, ManagerCatalog, ManagerOrders, ManagerProductList, PerformanceReport, SavedAnalysisList } from "./manager-types";
 
+import type { StoreStats, StoreOrder, StoreProduct } from "./store-types";
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 /**
@@ -702,17 +704,17 @@ class ApiClient {
     }>(`/api/admin/audit${qs ? `?${qs}` : ""}`);
   }
 
-  // Seller
-  getSellerProducts() {
-    return this.request<{ products: any[]; total: number }>("/api/seller/products");
+  // Whole-store management
+  getStoreProducts() {
+    return this.request<{ products: StoreProduct[]; total: number }>("/api/manager/store/products");
   }
 
-  getSellerOrders() {
-    return this.request<{ orders: any[]; total: number }>("/api/seller/orders");
+  getStoreOrders() {
+    return this.request<{ orders: StoreOrder[]; total: number }>("/api/manager/orders");
   }
 
-  getSellerStats() {
-    return this.request<any>("/api/seller/stats");
+  getStoreStats() {
+    return this.request<StoreStats>("/api/manager/store/stats");
   }
 
   getManagerCatalog(signal?: AbortSignal) {

@@ -32,7 +32,7 @@ PUBLIC_PATHS = {"/health", "/.well-known/agent-card.json"}
 
 # Roles the platform recognizes. 'system' is the inter-agent sentinel used when
 # a call originates without an end user (internal / health flows).
-_ALLOWED_ROLES = {"customer", "seller", "store_manager", "admin", "system"}
+_ALLOWED_ROLES = {"customer", "store_manager", "admin", "system"}
 
 
 def _identity_anomaly(email: str, role: str) -> str | None:

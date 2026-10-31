@@ -16,7 +16,7 @@ from shared.sales_analysis import AnalysisWindow, historical_analysis
 
 
 def denied() -> dict | None:
-    if not current_user_email.get() or current_user_role.get() not in {"store_manager", "admin"}:
+    if not current_user_email.get() or current_user_role.get() != "store_manager":
         return {"error": "permission_denied", "message": "Store manager access required"}
     return None
 

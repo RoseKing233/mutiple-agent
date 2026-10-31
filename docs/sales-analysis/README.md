@@ -1,5 +1,7 @@
 # Inventory and Sales Analysis：统一交接文档
 
+> 当前分支已统一为顾客、店铺经理、管理员三种业务身份；经理接管原商家职责并管理全店。经营接口仅限经理；管理员不继承经营和购物权限。迁移已到 007，后续从 008 开始。见[单店角色说明](../single-store-management.md)。以下保留原交接阶段记录，角色和迁移编号以新说明为准。
+
 维护位置：`docs/sales-analysis/README.md`。后续与本成员负责功能有关的字段、接口、预测及测试说明，继续更新此文件。
 本文合并了原数据说明、数据字典、库存接入说明和验证记录，不再维护多份平行交接文本。
 
@@ -27,7 +29,7 @@
 |---|---|
 | customer | 原有购物、个人订单；无经理分析接口权限 |
 | store_manager | 全店商品、销售、仓库库存和相关销售订单只读；无个人购物操作 |
-| admin | 可查询经理分析接口，保留原有系统管理权限 |
+| admin | 平台监控与审批；不能查询经理分析接口或购物 |
 | seller / power_user | 保留原行为，不自动获得全店经理权限 |
 
 经理没有 Cart、Orders、购物首页入口，登录后进入 `/analysis`。
@@ -36,7 +38,7 @@
 经理直接访问购物地址会转回分析页；购物 API 和共享 cart tools 也拒绝经理操作。
 普通注册接口始终创建 customer，不能通过提交 role 字段创建经理。
 
-角色通过 JWT 和现有 Agent 身份传递机制传递；经理不是 admin，也不拥有审批、退款或库存编辑权限。
+角色通过 JWT 和现有 Agent 身份传递机制传递；经理不是 admin，不拥有平台审批或退款审批权限；库存管理通过统一库存流水接口执行。
 本轮没有更改其他组员负责的在线退货、取消回补、库存 CRUD 和补货建议执行逻辑。
 
 > **2026-10-27 更新（Xinyu，库存管理模块）**：store_manager 现在有库存、仓库、商品（含上下架）的写权限，补货/积压建议在经理确认后可以执行。详见 `docs/inventory-management/README.md`。本文其余内容不变。
@@ -332,7 +334,7 @@ specialist→orchestrator 按完整事件拼接多行 data，而非逐行作为�
 
 ### 已保存报告读取与库存口径
 
-报告读取不能只复述聊天历史。`shared/forecasting/chat_policy.py` 对经理/admin 的明确中英文
+报告读取不能只复述聊天历史。`shared/forecasting/chat_policy.py` 对经理 的明确中英文
 报告读取请求使用 MAF 原生 `tool_choice`：orchestrator 首先调用 specialist，库存 Agent 首先
 调用读取工具；最新报告 ID 未知时先列出报告。MAF 执行首个工具后恢复正常工具选择。
 历史上下文只用于定位 UUID，`get_saved_sales_analysis` 仍校验报告归属，不重新预测或新增报告。
@@ -405,7 +407,7 @@ pnpm dev
 
 ## 管理接口
 
-历史接口均为 GET，需要 Bearer 登录令牌，允许 store_manager/admin；预测保存接口见下节。
+历史接口均为 GET，需要 Bearer 登录令牌，允许 store_manager；预测保存接口见下节。
 
 | 地址 | 参数/返回 |
 |---|---|
@@ -547,7 +549,7 @@ Playwright 默认连接 localhost:3000，可用 E2E_BASE_URL 更改；此用例�
 
 ### 新接口与结果表
 
-权限：store_manager/admin；报告列表和读取**仅限创建者本人**，包括 admin，不能通过猜 UUID 读取他人报告。
+权限：store_manager；报告列表和读取**仅限创建者本人**，管理员无经营报告权限，经理也不能通过猜 UUID 读取他人报告。
 
 | 方法/地址 | 作用 |
 |---|---|

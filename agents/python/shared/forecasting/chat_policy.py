@@ -17,7 +17,7 @@ _UUID = re.compile(r"\b[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\b", re.IGNORE
 
 
 def required_report_tool(message: str, agent_name: str, role: str) -> str | None:
-    if role not in {"store_manager", "admin"} or agent_name not in {"orchestrator", "inventory-fulfillment"}:
+    if role != "store_manager" or agent_name not in {"orchestrator", "inventory-fulfillment"}:
         return None
     normalised = " ".join(message.split())
     normalised = re.sub(

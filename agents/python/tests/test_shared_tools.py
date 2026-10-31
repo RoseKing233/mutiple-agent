@@ -28,7 +28,7 @@ from shared.tools.loyalty_tools import (
 )
 from shared.tools.memory_tools import recall_memories, store_memory
 from shared.tools.pricing_tools import get_price_history
-from shared.tools.seller_tools import get_my_products
+from shared.tools.store_tools import get_store_products
 from shared.tools.user_tools import get_purchase_history, get_user_profile
 
 # ─────────────────────── Shared fixture ─────────────────────────────────────
@@ -73,7 +73,7 @@ async def seeded_user(db_pool: asyncpg.Pool) -> dict:
 
 
 @pytest_asyncio.fixture
-async def seeded_seller(db_pool: asyncpg.Pool) -> dict:
+async def seeded_manager(db_pool: asyncpg.Pool) -> dict:
     """Insert a seller user for role-enforcement tests."""
     async with db_pool.acquire() as conn:
         # loyalty tiers
@@ -92,7 +92,7 @@ async def seeded_seller(db_pool: asyncpg.Pool) -> dict:
             )
         row = await conn.fetchrow(
             """INSERT INTO users (email, password_hash, name, role, loyalty_tier, total_spend)
-               VALUES ($1, 'hash', 'Seller Co', 'seller', 'bronze', 0)
+               VALUES ($1, 'hash', 'Seller Co', 'store_manager', 'bronze', 0)
                RETURNING id, email, role""",
             "seller@example.com",
         )
@@ -100,15 +100,15 @@ async def seeded_seller(db_pool: asyncpg.Pool) -> dict:
 
 
 @pytest_asyncio.fixture
-async def seeded_product(db_pool: asyncpg.Pool, seeded_seller: dict) -> dict:
-    """Insert a product owned by seeded_seller."""
+async def seeded_product(db_pool: asyncpg.Pool, seeded_manager: dict) -> dict:
+    """Insert a product owned by seeded_manager."""
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
             """INSERT INTO products
                (name, description, category, brand, price, seller_id, is_active)
                VALUES ('Test Widget', 'A test product', 'Electronics', 'Acme', 49.99, $1, TRUE)
                RETURNING id, name, price""",
-            seeded_seller["id"],
+            seeded_manager["id"],
         )
         return dict(row)
 
@@ -276,34 +276,32 @@ async def test_recall_memories_importance_clamp(seeded_user: dict) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_my_products_denied_for_customer(seeded_user: dict, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_store_products_denied_for_customer(seeded_user: dict, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "GUARDRAILS_ENABLED", True, raising=False)
     current_user_email.set(seeded_user["email"])
     current_user_role.set("customer")
-    result = await get_my_products()
+    with pytest.raises(PermissionError, match="Store manager"):
+        await get_store_products()
+
+
+@pytest.mark.asyncio
+async def test_get_store_products_allowed_for_manager(
+    seeded_manager: dict, seeded_product: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "GUARDRAILS_ENABLED", True, raising=False)
+    current_user_email.set(seeded_manager["email"])
+    current_user_role.set("store_manager")
+    result = await get_store_products()
     assert isinstance(result, dict)
-    assert result.get("error") == "permission_denied"
+    assert any(p["name"] == "Test Widget" for p in result["products"])
 
 
 @pytest.mark.asyncio
-async def test_get_my_products_allowed_for_seller(
-    seeded_seller: dict, seeded_product: dict, monkeypatch: pytest.MonkeyPatch
+async def test_get_store_products_denied_for_admin(
+    seeded_manager: dict, seeded_product: dict, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(settings, "GUARDRAILS_ENABLED", True, raising=False)
-    current_user_email.set(seeded_seller["email"])
-    current_user_role.set("seller")
-    result = await get_my_products()
-    assert isinstance(result, list)
-    assert any(p["name"] == "Test Widget" for p in result)
-
-
-@pytest.mark.asyncio
-async def test_get_my_products_allowed_for_admin(
-    seeded_seller: dict, seeded_product: dict, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(settings, "GUARDRAILS_ENABLED", True, raising=False)
-    current_user_email.set(seeded_seller["email"])
+    current_user_email.set(seeded_manager["email"])
     current_user_role.set("admin")
-    result = await get_my_products()
-    # admin is always allowed — result is a list (may be empty if admin email doesn't own products)
-    assert isinstance(result, list)
+    with pytest.raises(PermissionError, match="Store manager"):
+        await get_store_products()

@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { ChatOrderCard } from "./order-card";
+
+vi.mock("@/lib/auth-context", () => ({ useAuth: () => ({ user: { role: "customer" } }) }));
 
 describe("ChatOrderCard", () => {
   it("renders an object-shaped shipping_address instead of crashing (Phase 8.2)", () => {

@@ -1,4 +1,4 @@
-"""Manager inventory, warehouse, product and suggestion APIs. Writes are store_manager/admin only."""
+"""Manager inventory, warehouse, product and suggestion APIs. Writes are store_manager only."""
 
 from __future__ import annotations
 

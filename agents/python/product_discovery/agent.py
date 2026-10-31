@@ -20,13 +20,13 @@ from product_discovery.tools import (
 )
 from shared.agent_factory import create_chat_client
 from shared.config import settings
-from shared.context import current_user_role
-from shared.context_providers import ECommerceContextProvider
+from shared.context_providers import ECommerceContextProvider, RoleInstructionsProvider
 from shared.middleware import build_specialist_middleware
 from shared.oauth.service_client import acquire_service_token, build_mcp_http_client, set_mcp_auth_header
 from shared.tools.inventory_tools import check_stock, get_warehouse_availability
 from shared.tools.memory_tools import recall_memories, store_memory
 from shared.tools.pricing_tools import get_price_history
+from shared.tools.store_tools import get_store_products
 from shared.tools.user_tools import get_purchase_history, get_user_profile
 
 # Set once by create_product_discovery_agent() when MCP_ENABLED+MCP_AUTH_ENABLED;
@@ -36,6 +36,7 @@ from shared.tools.user_tools import get_purchase_history, get_user_profile
 _mcp_product_http_client = None
 
 AGENT_TOOLS = [
+    get_store_products,
     recommendation_evidence_tool,
     recommendation_reasons_tool,
     search_products,
@@ -77,6 +78,7 @@ def create_product_discovery_agent() -> Agent:
         )
         tools: list = [
             mcp_product,
+            get_store_products,
             recommendation_evidence_tool,
             recommendation_reasons_tool,
             semantic_search,
@@ -92,9 +94,9 @@ def create_product_discovery_agent() -> Agent:
         client=create_chat_client(),
         name="product-discovery",
         description="Natural language product search, semantic similarity, recommendations, and price tracking.",
-        instructions=get_system_prompt(current_user_role.get() or "customer"),
+        instructions=get_system_prompt(None),
         tools=tools,
-        context_providers=[ECommerceContextProvider()],
+        context_providers=[ECommerceContextProvider(), RoleInstructionsProvider("product-discovery")],
         middleware=build_specialist_middleware(),
     )
 

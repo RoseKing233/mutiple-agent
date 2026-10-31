@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
     name="check_return_eligibility",
     description="Check whether a delivered order is within the 30-day return request window.",
 )
+@requires_role("customer")
 async def check_return_eligibility(
     order_id: Annotated[str, Field(description="UUID of the order to check")],
 ) -> dict:
@@ -113,6 +114,7 @@ async def check_return_eligibility(
         "the system submits a refund for admin approval."
     ),
 )
+@requires_role("customer")
 @idempotent("initiate_return", cache_result_fn=lambda result: "return_id" in result)
 async def initiate_return(
     order_id: Annotated[str, Field(description="UUID of the order to return")],
@@ -236,8 +238,8 @@ async def initiate_return(
     ),
 )
 # Retries recheck the return status and reuse any pending approval below.
+@requires_role("customer")
 @idempotent("process_refund", cache_result_fn=lambda _result: False)
-@requires_role("customer", "seller", "admin")
 async def process_refund(
     return_id: Annotated[str, Field(description="UUID of the return to process refund for")],
     refund_method: Annotated[
@@ -351,6 +353,7 @@ async def process_refund(
 
 
 @tool(name="get_return_status", description="Get the current return processing status for an order.")
+@requires_role("customer")
 async def get_return_status(
     order_id: Annotated[str, Field(description="UUID of the order to check return status for")],
 ) -> dict:

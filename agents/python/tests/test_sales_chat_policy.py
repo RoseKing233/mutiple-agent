@@ -35,6 +35,7 @@ def test_required_report_tool(message: str, expected: str | None) -> None:
         "call_specialist_agent" if expected else None
     )
     assert required_report_tool(message, "inventory-fulfillment", "customer") is None
+    assert required_report_tool(message, "inventory-fulfillment", "admin") is None
     assert required_report_tool(message, "order-management", "admin") is None
 
 

@@ -19,7 +19,7 @@ from shared.config import settings
 
 def test_identity_anomaly_accepts_valid() -> None:
     assert _identity_anomaly("alice@example.com", "customer") is None
-    assert _identity_anomaly("alice@example.com", "seller") is None
+    assert _identity_anomaly("alice@example.com", "store_manager") is None
     assert _identity_anomaly("alice@example.com", "admin") is None
     assert _identity_anomaly("system", "system") is None
 

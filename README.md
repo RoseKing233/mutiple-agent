@@ -12,6 +12,8 @@
 
 A **multi-agent e-commerce platform** built with [Microsoft Agent Framework](https://github.com/microsoft/agent-framework) (MAF). Six specialized AI agents collaborate over the **A2A protocol** to handle product discovery, orders, pricing, reviews, inventory and support — with **two complete, working backends, Python and .NET / C#**, behind one Next.js frontend.
 
+This course branch uses a single-store model: customer, store manager and platform admin. See [single-store roles and setup](docs/single-store-management.md). Build this branch from source to include the course features.
+
 ### Run it
 
 ```bash

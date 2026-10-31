@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
+import { roleRedirect } from "@/lib/role-access";
 import { CartProvider } from "@/lib/cart-context";
 import { DesktopSidebar, MobileSidebar } from "@/components/sidebar";
 import { TopBar } from "@/components/top-bar";
@@ -12,14 +13,14 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
-  const managerShoppingPath = user?.role === "store_manager" && ["/home", "/cart", "/checkout", "/orders"].some((p) => pathname === p || pathname.startsWith(`${p}/`));
+  const redirectTo = user ? roleRedirect(user.role, pathname) : null;
 
   useEffect(() => {
     if (!isLoading && !user) {
       router.replace("/login");
     }
-    if (managerShoppingPath) router.replace("/analysis");
-  }, [user, isLoading, router, managerShoppingPath]);
+    if (redirectTo) router.replace(redirectTo);
+  }, [user, isLoading, router, redirectTo]);
 
   // Show nothing while checking auth state
   if (isLoading) {
@@ -31,7 +32,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }
 
   // Don't render the app shell until we confirm the user is authenticated
-  if (!user || managerShoppingPath) {
+  if (!user || redirectTo) {
     return null;
   }
 

@@ -11,8 +11,7 @@ from order_management.tools import (
     modify_order,
 )
 from shared.agent_factory import create_chat_client
-from shared.context import current_user_role
-from shared.context_providers import ECommerceContextProvider
+from shared.context_providers import ECommerceContextProvider, RoleInstructionsProvider
 from shared.middleware import build_specialist_middleware
 from shared.tools.cart_tools import (
     add_to_cart,
@@ -31,9 +30,12 @@ from shared.tools.return_tools import (
     initiate_return,
     process_refund,
 )
+from shared.tools.store_tools import get_store_orders, get_store_stats
 from shared.tools.user_tools import get_user_profile
 
 AGENT_TOOLS = [
+    get_store_orders,
+    get_store_stats,
     get_user_orders,
     get_order_details,
     get_order_tracking,
@@ -63,8 +65,8 @@ def create_order_management_agent() -> Agent:
         client=create_chat_client(),
         name="order-management",
         description="Order tracking, cancellation, modification, returns, and refund processing.",
-        instructions=get_system_prompt(current_user_role.get() or "customer"),
+        instructions=get_system_prompt(None),
         tools=AGENT_TOOLS,
-        context_providers=[ECommerceContextProvider()],
+        context_providers=[ECommerceContextProvider(), RoleInstructionsProvider("order-management")],
         middleware=build_specialist_middleware(),
     )
