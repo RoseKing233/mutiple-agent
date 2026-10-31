@@ -2,10 +2,10 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ChatPage from "./page";
 
-const transport = vi.hoisted(() => ({ chatStream: vi.fn(), getConversations: vi.fn() }));
+const transport = vi.hoisted(() => ({ chatStream: vi.fn(), getConversations: vi.fn(), role: "customer" }));
 vi.mock("@/lib/api", () => ({ api: transport }));
 vi.mock("next/navigation", () => ({ useSearchParams: () => new URLSearchParams() }));
-vi.mock("@/lib/auth-context", () => ({ useAuth: () => ({ isAuthenticated: true }) }));
+vi.mock("@/lib/auth-context", () => ({ useAuth: () => ({ isAuthenticated: true, user: { role: transport.role } }) }));
 vi.mock("@/lib/cart-context", () => ({ useCart: () => ({ itemCount: 0 }) }));
 vi.mock("@/components/chat/mode-switcher", () => ({ ModeSwitcher: () => null }));
 vi.mock("@/components/chat/mode-comparison", () => ({ ModeComparison: () => null }));
@@ -22,6 +22,7 @@ const step = { agent: "inventory-fulfillment", tool_name: "analyze_product_perfo
 
 beforeEach(() => {
   vi.clearAllMocks();
+  transport.role = "customer";
   transport.getConversations.mockResolvedValue([]);
   Element.prototype.scrollIntoView = vi.fn();
 });
@@ -57,5 +58,21 @@ describe("chat stream message identity", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send test request" }));
     await waitFor(() => expect(screen.getAllByText("One graph answer")).toHaveLength(1));
     expect(screen.getAllByText("1 recorded steps")).toHaveLength(1);
+  });
+});
+
+
+describe("role-specific chat controls", () => {
+  it("keeps the customer cart and shopping prompts", () => {
+    render(<ChatPage />);
+    expect(screen.getByRole("link", { name: "Cart" })).toHaveAttribute("href", "/cart");
+    expect(screen.getByRole("button", { name: "Product Search" })).toBeVisible();
+  });
+  it.each(["store_manager", "admin"])("hides shopping controls for %s", (role) => {
+    transport.role = role;
+    render(<ChatPage />);
+    expect(screen.queryByRole("link", { name: "Cart" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Product Search" })).toBeNull();
+    expect(screen.getByRole("button", { name: role === "admin" ? "Approval guide" : "Low stock" })).toBeVisible();
   });
 });

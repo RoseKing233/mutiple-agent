@@ -76,10 +76,11 @@ export interface PromptInputBoxProps {
   className?: string;
   disabled?: boolean;
   suggestions?: { label: string; prompt: string }[];
+  modes?: AgentMode[];
 }
 
 export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxProps>(
-  ({ onSend, isLoading = false, className, disabled = false, suggestions = [] }, ref) => {
+  ({ onSend, isLoading = false, className, disabled = false, suggestions = [], modes = AGENT_MODES }, ref) => {
     const [input, setInput] = React.useState("");
     const [agentMode, setAgentMode] = React.useState<string | null>(null);
     const [attachedFile, setAttachedFile] = React.useState<File | null>(null);
@@ -91,7 +92,7 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
     const fileInputRef = React.useRef<HTMLInputElement>(null);
     const MAX_HEIGHT = 240;
 
-    const currentMode = AGENT_MODES.find((m) => m.id === agentMode) ?? AGENT_MODES[0];
+    const currentMode = modes.find((m) => m.id === agentMode) ?? modes[0] ?? AGENT_MODES[0];
     const placeholder = currentMode.placeholder;
 
     // Auto-resize textarea
@@ -126,7 +127,7 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
 
     const handleSubmit = () => {
       if (!hasContent || isDisabled) return;
-      onSend(input.trim(), agentMode);
+      onSend(input.trim(), currentMode.id);
       setInput("");
       setAttachedFile(null);
       setFilePreview(null);
@@ -296,7 +297,7 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
                 scope. Collapsing that one would hide the feature this repo is
                 built around.
               */}
-              <div className="relative" ref={modeMenuRef}>
+              {modes.length > 1 && <div className="relative" ref={modeMenuRef}>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
@@ -333,7 +334,7 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
                       transition={{ duration: 0.12 }}
                       className="absolute bottom-full left-0 z-50 mb-2 min-w-44 overflow-hidden rounded-lg border bg-popover p-1 shadow-md"
                     >
-                      {AGENT_MODES.map((mode) => (
+                      {modes.map((mode) => (
                         <button
                           key={String(mode.id)}
                           type="button"
@@ -358,7 +359,7 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
                     </motion.div>
                   )}
                 </AnimatePresence>
-              </div>
+              </div>}
 
               {/* Keyboard hint */}
               <span className="hidden select-none text-[10px] text-muted-foreground/50 sm:block">

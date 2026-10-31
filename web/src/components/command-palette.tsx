@@ -33,6 +33,7 @@ export function CommandPalette() {
   const router = useRouter();
   const { isAdmin, user } = useAuth();
   const isManager = user?.role === "store_manager";
+  const isCustomer = user?.role === "customer";
 
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -46,7 +47,7 @@ export function CommandPalette() {
 
   // Fetch recent orders when palette opens (top 5, no caching needed)
   useEffect(() => {
-    if (!open || !user || isManager) return;
+    if (!open || !isCustomer) return;
     api
       .getOrders()
       .then((r) => {
@@ -54,25 +55,25 @@ export function CommandPalette() {
         setRecentOrders(orders.slice(0, 5));
       })
       .catch(() => setRecentOrders([]));
-  }, [open, user, isManager]);
+  }, [open, isCustomer]);
 
   const allItems = useMemo<PaletteItem[]>(() => {
     const navPaletteItems: PaletteItem[] = navItems.map((nav) => ({
       kind: "nav",
       nav,
     }));
-    const scenarioPaletteItems: PaletteItem[] = (isManager ? [] : DEMO_SCENARIOS).map((s) => ({
+    const scenarioPaletteItems: PaletteItem[] = (isCustomer ? DEMO_SCENARIOS : []).map((s) => ({
       kind: "scenario",
       label: s.label,
       description: s.description,
       href: chatPromptHref(s.prompt),
     }));
-    const orderItems: PaletteItem[] = (isManager ? [] : recentOrders).map((order) => ({
+    const orderItems: PaletteItem[] = (isCustomer ? recentOrders : []).map((order) => ({
       kind: "order",
       order,
     }));
     return [...navPaletteItems, ...scenarioPaletteItems, ...orderItems];
-  }, [navItems, recentOrders, isManager]);
+  }, [navItems, recentOrders, isCustomer]);
 
   const filtered = useMemo<PaletteItem[]>(() => {
     const q = query.trim().toLowerCase();
@@ -177,8 +178,8 @@ export function CommandPalette() {
               setActive(0);
             }}
             onKeyDown={onInputKey}
-            placeholder="Search pages, scenarios, or orders…"
-            aria-label="Search pages, scenarios, or orders"
+            placeholder={isCustomer ? "Search pages, scenarios, or orders…" : "Search pages…"}
+            aria-label={isCustomer ? "Search pages, scenarios, or orders" : "Search pages"}
             className="h-11 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
           />
           <kbd className="hidden rounded border bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground sm:inline">

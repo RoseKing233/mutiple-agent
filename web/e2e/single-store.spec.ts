@@ -60,3 +60,36 @@ test("admin has platform approvals without shopping or store operations", async 
   await nav.getByRole("link", { name: "Returns", exact: true }).click();
   await expect(page).toHaveURL(/\/admin\/returns/);
 });
+
+
+for (const role of ["manager", "admin"] as const) {
+  test(`${role} sees no shopping controls in chat, search or profile`, async ({ page }) => {
+    await login(page, `${role}@test.com`, "12345678");
+    await expect(page).toHaveURL(role === "admin" ? /\/admin$/ : /\/analysis/);
+    await page.goto("/chat");
+    await expect(page.getByRole("link", { name: "Cart", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Product Search", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: role === "admin" ? "Approval guide" : "Low stock", exact: true }).first()).toBeVisible();
+    await page.getByRole("button", { name: "Search (Cmd+K)" }).click();
+    const search = page.getByRole("dialog");
+    await expect(search.getByRole("textbox", { name: "Search pages", exact: true })).toBeVisible();
+    await expect(search.getByRole("button", { name: "Cart", exact: true })).toHaveCount(0);
+    await expect(search.getByText("Demo scenarios", { exact: true })).toHaveCount(0);
+    await expect(search.getByText("Recent orders", { exact: true })).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await page.goto("/profile");
+    await expect(page.getByText("Account Details", { exact: true })).toBeVisible();
+    await expect(page.getByText("Total Spend", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Loyalty Benefits", { exact: true })).toHaveCount(0);
+    await page.screenshot({ path: `../.claude/single-store-checks/${role}-profile-no-shopping.png`, fullPage: true });
+  });
+}
+
+test("customer keeps chat shopping and the cart page", async ({ page }) => {
+  await login(page, "user@test.com", "12345678");
+  await expect(page).toHaveURL(/\/chat/);
+  await expect(page.getByRole("link", { name: "Cart", exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Product Search", exact: true }).first()).toBeVisible();
+  await page.goto("/cart");
+  await expect(page.getByRole("heading", { name: "Shopping Cart", exact: true })).toBeVisible();
+});

@@ -17,7 +17,7 @@ import { GroundingBadge } from "@/components/chat/grounding-badge";
 import { OrchestrationGraph } from "@/components/chat/orchestration-graph";
 import { ModeSwitcher } from "@/components/chat/mode-switcher";
 import { ModeComparison } from "@/components/chat/mode-comparison";
-import { QUICK_PROMPTS } from "@/lib/scenarios";
+import { chatExperience } from "@/lib/chat-role";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { PromptInputBox } from "@/components/ui/ai-prompt-box";
@@ -47,7 +47,6 @@ import {
   Sparkles,
 } from "lucide-react";
 import { ApprovalCard } from "@/components/chat/approval-card";
-import { DEMO_SCENARIOS } from "@/lib/scenarios";
 import { deriveSuggestions } from "@/lib/suggestions";
 import { AGENT_MODES } from "@/components/ui/ai-prompt-box";
 
@@ -308,7 +307,9 @@ function MessageContent({ content }: { content: string }) {
 // ---------------------------------------------------------------------------
 
 export default function ChatPage() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
+  const isCustomer = user?.role === "customer";
+  const experience = useMemo(() => chatExperience(user?.role), [user?.role]);
   const { itemCount } = useCart();
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -345,11 +346,12 @@ export default function ChatPage() {
       .reverse()
       .find((m) => m.role === "assistant" && !m.streaming);
 
+    if (!isCustomer) return experience.prompts;
     return deriveSuggestions(
       lastAssistant?.content,
-      DEMO_SCENARIOS.slice(0, 4).map((s) => ({ label: s.label, prompt: s.prompt }))
+      experience.prompts
     );
-  }, [messages]);
+  }, [messages, isCustomer, experience]);
   // Per-message abort controller. New send aborts any in-flight stream;
   // unmount aborts whatever's still running. Plugs the SSE-leak finding.
   const streamAbortRef = useRef<AbortController | null>(null);
@@ -536,7 +538,7 @@ export default function ChatPage() {
     // (e.g. the user picks a different mode for their next message while
     // this one is still streaming), but this message ran through whatever
     // was selected at send time.
-    const messageMode = orchestrationMode || "tool";
+    const messageMode = (isCustomer && orchestrationMode) || "tool";
 
     // Abort any prior stream still draining before starting a new one.
     streamAbortRef.current?.abort();
@@ -613,7 +615,7 @@ export default function ChatPage() {
               prev.map((m) => (m.id === assistantId ? { ...m, grounding: report } : m)),
             );
           },
-          mode: orchestrationMode || undefined,
+          mode: messageMode === "tool" ? undefined : messageMode,
         },
       );
 
@@ -621,7 +623,7 @@ export default function ChatPage() {
       // re-key the draft-stored mode under the real conversation id so a
       // reload still picks it up.
       if (!activeConversationId && meta.conversation_id) {
-        storeOrchestrationMode(meta.conversation_id, orchestrationMode);
+        storeOrchestrationMode(meta.conversation_id, isCustomer ? orchestrationMode : "");
         justCreatedConversationRef.current = meta.conversation_id;
         setActiveConversationId(meta.conversation_id);
         await loadConversations();
@@ -709,7 +711,8 @@ export default function ChatPage() {
               : "New chat"}
           </h2>
 
-          <Link
+          {isCustomer && <Link
+            aria-label="Cart"
             href="/cart"
             className="relative flex items-center gap-1 rounded-lg px-2 py-1 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
           >
@@ -719,7 +722,7 @@ export default function ChatPage() {
                 {itemCount > 99 ? "99+" : itemCount}
               </span>
             )}
-          </Link>
+          </Link>}
 
           <Button
             variant="ghost"
@@ -743,12 +746,10 @@ export default function ChatPage() {
                 How can I help you today?
               </h3>
               <p className="max-w-sm text-sm text-muted-foreground">
-                Ask about products, orders, pricing, reviews, inventory, or
-                anything else. Our specialist agents will collaborate to help
-                you.
+                {experience.description}
               </p>
               <div className="mt-2 flex flex-wrap justify-center gap-2">
-                {QUICK_PROMPTS.map((s) => (
+                {experience.prompts.map((s) => (
                   <button
                     key={s.label}
                     type="button"
@@ -893,14 +894,15 @@ export default function ChatPage() {
         {/* ---- Input area ---- */}
         <div className="border-t bg-background px-4 py-3">
           <div className="mx-auto max-w-3xl space-y-2">
-            <div className="flex items-center justify-end gap-2">
+            {isCustomer && <div className="flex items-center justify-end gap-2">
               <ModeComparison />
               <ModeSwitcher value={orchestrationMode} onChange={handleModeChange} disabled={isResponding} />
-            </div>
+            </div>}
             <PromptInputBox
               onSend={(message, agentMode) => sendMessage(message, agentMode)}
               isLoading={isResponding}
               suggestions={suggestions}
+              modes={experience.modes}
             />
           </div>
         </div>

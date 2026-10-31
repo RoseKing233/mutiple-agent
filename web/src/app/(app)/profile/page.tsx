@@ -190,7 +190,7 @@ export default function ProfilePage() {
             <div>
               <h1 className="text-2xl font-bold text-foreground">My Profile</h1>
               <p className="text-sm text-muted-foreground">
-                Your account details and loyalty status
+                {user?.role === "customer" ? "Your account details and loyalty status" : "Your account details"}
               </p>
             </div>
           </div>
@@ -222,8 +222,8 @@ export default function ProfilePage() {
                 <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start">
                   {/* Avatar */}
                   <div
-                    className="flex size-20 shrink-0 items-center justify-center rounded-full text-2xl font-bold text-white"
-                    style={{ backgroundColor: TIER_COLORS[profile.loyalty_tier]?.accent ?? "#64748b" }}
+                    className="flex size-20 shrink-0 items-center justify-center rounded-full bg-primary text-2xl font-bold text-primary-foreground"
+                    style={profile.role === "customer" ? { backgroundColor: TIER_COLORS[profile.loyalty_tier]?.accent } : undefined}
                   >
                     {getInitials(profile.name)}
                   </div>
@@ -253,6 +253,7 @@ export default function ProfilePage() {
               </CardContent>
             </Card>
 
+            {profile.role === "customer" && <>
             {/* Stats cards */}
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               {/* Loyalty Tier */}
@@ -428,6 +429,7 @@ export default function ProfilePage() {
               </CardContent>
             </Card>
 
+            </>}
             {/* Account Details */}
             <Card>
               <CardHeader>

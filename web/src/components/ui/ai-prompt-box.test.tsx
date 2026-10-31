@@ -161,3 +161,23 @@ describe("PromptInputBox — suggestions", () => {
     expect(screen.queryByRole("button", { name: "Check stock" })).not.toBeInTheDocument();
   });
 });
+
+
+describe("role-specific specialist options", () => {
+  it("hides the specialist menu when only automatic routing is available", () => {
+    render(<PromptInputBox onSend={() => {}} modes={[{ id: null, label: "Auto", placeholder: "Platform help" }]} />);
+    expect(screen.queryByRole("button", { name: "Specialist" })).toBeNull();
+    expect(screen.getByPlaceholderText("Platform help")).toBeVisible();
+  });
+  it("shows only the configured operational specialists", async () => {
+    const user = userEvent.setup();
+    render(<PromptInputBox onSend={() => {}} modes={[
+      { id: null, label: "Auto", placeholder: "Store help" },
+      { id: "order-management", label: "Store orders", placeholder: "View store orders" },
+    ]} />);
+    const listbox = await openPicker(user);
+    expect(within(listbox).getAllByRole("option")).toHaveLength(2);
+    await waitFor(() => expect(within(listbox).getByRole("option", { name: "Store orders" })).toBeVisible());
+    expect(within(listbox).queryByRole("option", { name: "Pricing" })).toBeNull();
+  });
+});
